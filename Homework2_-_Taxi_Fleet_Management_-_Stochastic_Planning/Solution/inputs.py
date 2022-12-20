@@ -61,5 +61,3 @@ small_inputs = [
         "turns to go": 100
     }
 ]
-
-

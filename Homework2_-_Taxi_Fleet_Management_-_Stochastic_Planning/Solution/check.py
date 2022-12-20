@@ -264,7 +264,6 @@ class TaxiStochasticProblem:
             g.remove_node(node)
         return g
 
-
 def main():
     """
     main function
