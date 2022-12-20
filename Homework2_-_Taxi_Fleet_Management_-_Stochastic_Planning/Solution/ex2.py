@@ -346,8 +346,11 @@ class Agent:
         self.result(state, action, inplace=True, return_encoded=False)
         for destinations in product(*[set(self.state["passengers"][p]["possible_goals"]).union(
                 self.state["passengers"][p]["destination"]) for p in self.passengers_names]):
+
             for passenger, destination in zip(self.passengers_names, destinations):
                 self.state["passengers"][passenger]["destination"] = destination
+
+            yield deepcopy(self.state)
 
 
     def act(self, state):
