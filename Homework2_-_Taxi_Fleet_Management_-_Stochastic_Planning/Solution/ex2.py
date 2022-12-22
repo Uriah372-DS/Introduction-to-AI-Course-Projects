@@ -116,23 +116,24 @@ class Agent:
                 score -= REFUEL_PENALTY
         return score
 
-    def transitions(self):
+    def transition(self, state, action, new_state):
         """ The function that calculates the probability of getting to new_state from state by performing action. """
-        # # TODO: remove this function!
-        # probability = 1
-        # self.decode_state(self.result(state, action))
-        # new_state = self.decode_state(new_state, inplace=False)
-        # for p in self.passengers_names:
-        #     pc = self.initial_state[p]["prob_change_goal"]
-        #     probability *= pc * (1 / len(self.state[p]["possible_goals"])) + (
-        #                 self.state[p]["destination"] == new_state[p]["destination"]) * (1 - pc)
-        #
-        # return probability
-
+        probability = 1
+        self.decode_state(self.result(state, action))
+        new_state = self.decode_state(new_state, inplace=False)
         for p in self.passengers_names:
             pc = self.initial_state[p]["prob_change_goal"]
-            self.initial_state["passengers"][p]["prob_different_specific_goal"] = pc / len(self.state[p]["possible_goals"])
-            self.initial_state["passengers"][p]["prob_same_goal"] = (pc / len(self.state[p]["possible_goals"])) + (1 - pc)
+
+            if self.state[p]["destination"] in self.state[p]["possible_goals"]:
+                probability *= (pc / len(self.state[p]["possible_goals"])) + (
+                        self.state[p]["destination"] == new_state[p]["destination"]) * (1 - pc)
+            else:
+                if self.state[p]["destination"] == new_state[p]["destination"]:
+                    probability *= 1 - pc
+                else:
+                    probability *= (pc / len(self.state[p]["possible_goals"]))
+
+        return probability
 
     def is_action_legal(self, action, taxis_location_dict):
         """
@@ -352,7 +353,6 @@ class Agent:
 
             yield deepcopy(self.state)
 
-
     def act(self, state):
         """ The Agent's policy function. """
         raise NotImplemented
@@ -363,6 +363,7 @@ class OptimalTaxiAgent(Agent):
         Agent.__init__(self, initial)
         self.states = nx.DiGraph()
         self.get_all_states(state=self.initial_state, visited={self.encode_state(self.initial_state)})
+        self.value_iteration()
 
     def get_all_states(self, state, visited):
         if state["turns to go"] < 0:
@@ -374,10 +375,15 @@ class OptimalTaxiAgent(Agent):
                 self.states.add_edge(u_of_edge=s,
                                      v_of_edge=s_child,
                                      action=action,
-                                     value=self.reward(action))
+                                     value=self.reward(action),
+                                     transition_probability=self.transition(state, action, sweet_summer_child))
                 if s_child not in visited:
                     visited.add(s_child)
                     self.get_all_states(state=sweet_summer_child, visited=visited)
+
+        best_neighbor = max([n for n in self.states.successors(s)],
+                            key=lambda n: self.states[s][n]["value"])
+        self.states[s]["policy"] = self.states[s][best_neighbor]["action"]
 
     def value_iteration(self):
         pass
