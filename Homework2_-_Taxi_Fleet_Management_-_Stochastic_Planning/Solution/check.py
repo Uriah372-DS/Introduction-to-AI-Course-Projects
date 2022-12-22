@@ -69,6 +69,7 @@ class TaxiStochasticProblem:
         """
         check if the action is legal
         """
+
         def _is_move_action_legal(move_action):
             taxi_name = move_action[1]
             if taxi_name not in self.state['taxis'].keys():
@@ -89,7 +90,8 @@ class TaxiStochasticProblem:
             if self.state['taxis'][taxi_name]['capacity'] <= 0:
                 return False
             # check passenger is not in his destination
-            if self.state['passengers'][passenger_name]['destination'] == self.state['passengers'][passenger_name]['location']:
+            if self.state['passengers'][passenger_name]['destination'] == self.state['passengers'][passenger_name][
+                'location']:
                 return False
             return True
 
@@ -264,13 +266,15 @@ class TaxiStochasticProblem:
             g.remove_node(node)
         return g
 
+
 def main():
     """
     main function
     """
     print(f"IDS: {ids}")
-    for an_input in small_inputs:
+    for i, an_input in zip(range(1, 19), small_inputs):
         try:
+            print(f"Test No. {i}:")
             my_problem = TaxiStochasticProblem(an_input)
             my_problem.run_round()
         except EndOfGame:

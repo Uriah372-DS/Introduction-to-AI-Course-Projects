@@ -1,6 +1,6 @@
 small_inputs = [
     # 3x3 1 taxi, 1 passenger w/ 2 possible goals, plenty of fuel
-    {
+    {  # 1
         "optimal": True,
         "map": [['P', 'P', 'P'],
                 ['P', 'G', 'P'],
@@ -11,7 +11,7 @@ small_inputs = [
         "turns to go": 100
     },
     # 3x3 1 taxi, 1 passenger w/ 2 possible goals, low fuel
-    {
+    {  # 2
         "optimal": True,
         "map": [['P', 'P', 'P'],
                 ['P', 'G', 'P'],
@@ -22,7 +22,7 @@ small_inputs = [
         "turns to go": 100
     },
     # 3x3 2 taxi, 2 passengers w/ 1 possible goals, low fuel
-    {
+    {  # 3
         "optimal": False,
         "map": [['P', 'P', 'G'],
                 ['P', 'P', 'P'],
@@ -37,7 +37,7 @@ small_inputs = [
         "turns to go": 100
     },
     # 3x4 1 taxi, 1 passenger w/ 2 possible goals, low fuel
-    {
+    {  # 4
         "optimal": False,
         "map": [['P', 'P', 'P', 'P'],
                 ['I', 'I', 'I', 'G'],
@@ -48,7 +48,7 @@ small_inputs = [
         "turns to go": 100
     },
     # 4x4 2 taxi, 1 passenger w/ 2 possible goals, no gas station
-    {
+    {  # 5
         "optimal": False,
         "map": [['P', 'P', 'P', 'P'],
                 ['I', 'I', 'I', 'P'],

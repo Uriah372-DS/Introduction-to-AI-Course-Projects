@@ -1,10 +1,15 @@
+import random
+
 import networkx as nx
-import numpy as np
 from copy import deepcopy
-from check import RESET_PENALTY, REFUEL_PENALTY, DROP_IN_DESTINATION_REWARD
 from itertools import product
 
 ids = ["322691718", "313539850"]
+
+RESET_PENALTY = 50
+REFUEL_PENALTY = 10
+DROP_IN_DESTINATION_REWARD = 100
+TERMINAL_STATE = {"turns to go": 0}
 
 
 class Agent:
@@ -27,11 +32,11 @@ class Agent:
         self.map_shape = (len(self.map), len(self.map[0]))
         del initial_copy["map"]
         self.initial_state = deepcopy(initial_copy)
-        self.transitions()
         self.state = deepcopy(self.initial_state)
         self.graph = self.build_graph()
         self.taxi_names = list(self.state["taxis"].keys())
         self.passengers_names = list(self.state["passengers"].keys())
+        self.encoded_initial_state = self.encode_state(self.initial_state)
 
     def build_graph(self):
         """ build the graph of the problem. """
@@ -46,9 +51,9 @@ class Agent:
 
     def encode_state(self, state=None):
         """
-        encode state in a safe format
+        encode state in a safe format.
         :returns: tuple.
-            the encoded state
+            the encoded state.
         """
         if state:
             self.state = state
@@ -59,7 +64,7 @@ class Agent:
                 self.state["taxis"][taxi_name]["fuel"],
                 self.state["taxis"][taxi_name]["capacity"]
             )
-            for taxi_name, taxi_details in self.taxi_names)
+            for taxi_name in self.taxi_names)
 
         passengers = tuple(
             (
@@ -67,21 +72,21 @@ class Agent:
                 self.state["passengers"][passenger_name]["location"],
                 self.state["passengers"][passenger_name]["destination"]
             )
-            for passenger_name, passenger_details in self.passengers_names)
+            for passenger_name in self.passengers_names)
 
-        new_state = (taxis, passengers)
+        new_state = (taxis, passengers, self.state["turns to go"])
 
         return new_state
 
-    def decode_state(self, state=None, inplace=True):
+    def decode_state(self, state=None, into_self_state=True):
         """
         return state to operational format.
         :param state: the state | None
-        :param inplace: if True - decode ~self.state~, else decode given state
-        :return: if inplace = False - return Operational state, else return None
+        :param into_self_state: if True - decode state contents into ~self.state~,
+            else decode state contents into a copy of ~self.state~.
+        :return: if into_self_state = False - return Operational state, else return None
         """
-        # TODO: decide with Orly how to represent states and encode / decode them, decoding!
-        if inplace:
+        if into_self_state:
             for taxi_name, location, fuel, capacity in state[0]:
                 self.state["taxis"][taxi_name]["location"] = location
                 self.state["taxis"][taxi_name]["fuel"] = fuel
@@ -90,6 +95,8 @@ class Agent:
             for passenger_name, location, destination in state[1]:
                 self.state["passengers"][passenger_name]["location"] = location
                 self.state["passengers"][passenger_name]["destination"] = destination
+            self.state["turns to go"] = state[2]
+            return self.state
         else:
             new_state = deepcopy(self.state)
             for taxi_name, location, fuel, capacity in state[0]:
@@ -100,12 +107,13 @@ class Agent:
             for passenger_name, location, destination in state[1]:
                 new_state["passengers"][passenger_name]["location"] = location
                 new_state["passengers"][passenger_name]["destination"] = destination
+            new_state["turns to go"] = state[2]
             return new_state
 
     def reward(self, action):
         """ The function that calculates reward of performing this action on a state. """
         if action == "reset":
-            return RESET_PENALTY
+            return -RESET_PENALTY
         elif action == "terminate":
             return 0
         score = 0
@@ -117,36 +125,55 @@ class Agent:
         return score
 
     def transition(self, state, action, new_state):
-        """ The function that calculates the probability of getting to new_state from state by performing action. """
-        probability = 1
-        self.decode_state(self.result(state, action))
-        new_state = self.decode_state(new_state, inplace=False)
-        for p in self.passengers_names:
-            pc = self.initial_state[p]["prob_change_goal"]
+        """
+        The function that calculates the probability of getting to new_state from state by performing action.
+        :param state: current state, in dict format.
+        :param action: the action to perform.
+        :param new_state: possible new state, in dict format.
+        :return: float.
+            the probability to reach new_state from state using action.
+        """
 
-            if self.state[p]["destination"] in self.state[p]["possible_goals"]:
-                probability *= (pc / len(self.state[p]["possible_goals"])) + (
-                        self.state[p]["destination"] == new_state[p]["destination"]) * (1 - pc)
-            else:
-                if self.state[p]["destination"] == new_state[p]["destination"]:
-                    probability *= 1 - pc
+        probability = 1
+        if action == "terminate":
+            probability = float(new_state == TERMINAL_STATE)
+        elif action == "reset":
+            self.result(state, action, into_self_state=True, return_encoded=False)
+            encoded_new_state = self.encode_state(new_state)
+            probability = float(self.encoded_initial_state[0] == encoded_new_state[0] and
+                                self.encoded_initial_state[1] == encoded_new_state[1])
+        else:
+            self.result(state, action, into_self_state=True, return_encoded=False)
+
+            for passenger in self.passengers_names:
+                pc = self.state["passengers"][passenger]["prob_change_goal"]
+
+                if self.state["passengers"][passenger]["destination"] in \
+                        self.state["passengers"][passenger]["possible_goals"]:
+                    probability *= (pc / len(self.state["passengers"][passenger]["possible_goals"])) + (
+                            self.state["passengers"][passenger]["destination"] ==
+                            new_state["passengers"][passenger]["destination"]) * (1 - pc)
                 else:
-                    probability *= (pc / len(self.state[p]["possible_goals"]))
+                    if self.state["passengers"][passenger]["destination"] == \
+                            new_state["passengers"][passenger]["destination"]:
+                        probability *= 1 - pc
+                    else:
+                        probability *= (pc / len(self.state["passengers"][passenger]["possible_goals"]))
 
         return probability
 
-    def is_action_legal(self, action, taxis_location_dict):
+    def is_action_legal(self, state, action, taxis_location_dict):
         """
-        check if the action is legal to perform on ~self.state~
+        check if the action is legal to perform on ~self.state~.
         """
 
         def _is_move_action_legal(atomic_move_action):
             taxi_name = atomic_move_action[1]
             if taxi_name not in self.taxi_names:
                 return False
-            if self.state['taxis'][taxi_name]['fuel'] == 0:
+            if state['taxis'][taxi_name]['fuel'] == 0:
                 return False
-            l1 = self.state['taxis'][taxi_name]['location']
+            l1 = state['taxis'][taxi_name]['location']
             l2 = atomic_move_action[2]
             return l2 in list(self.graph.neighbors(l1))
 
@@ -154,14 +181,14 @@ class Agent:
             taxi_name = pick_up_action[1]
             passenger_name = pick_up_action[2]
             # check same position
-            if self.state['taxis'][taxi_name]['location'] != self.state['passengers'][passenger_name]['location']:
+            if state['taxis'][taxi_name]['location'] != state['passengers'][passenger_name]['location']:
                 return False
             # check taxi capacity
-            if self.state['taxis'][taxi_name]['capacity'] <= 0:
+            if state['taxis'][taxi_name]['capacity'] <= 0:
                 return False
             # check passenger is not in his destination
-            if self.state['passengers'][passenger_name]['destination'] == \
-                    self.state['passengers'][passenger_name]['location']:
+            if state['passengers'][passenger_name]['destination'] == \
+                    state['passengers'][passenger_name]['location']:
                 return False
             return True
 
@@ -169,14 +196,14 @@ class Agent:
             """ check same position. """
             taxi_name = drop_action[1]
             passenger_name = drop_action[2]
-            if self.state['taxis'][taxi_name]['location'] == self.state['passengers'][passenger_name]['destination']:
+            if state['taxis'][taxi_name]['location'] == state['passengers'][passenger_name]['destination']:
                 return True
             return False
 
         def _is_refuel_action_legal(refuel_action):
             """ check if taxi in gas location. """
             taxi_name = refuel_action[1]
-            i, j = self.state['taxis'][taxi_name]['location']
+            i, j = state['taxis'][taxi_name]['location']
             if self.map[i][j] == 'G':
                 return True
             else:
@@ -233,7 +260,7 @@ class Agent:
             return False
 
         # check taxis collision
-        if len(self.state['taxis']) > 1:
+        if len(state['taxis']) > 1:
 
             move_actions = [a for a in action if a[0] == 'move']
 
@@ -244,9 +271,11 @@ class Agent:
                 return False
         return True
 
-    def get_atomic_actions(self, taxi_name):
+    def get_atomic_actions(self, state, taxi_name):
         """
         Return all possible actions that the given taxi can make in ~self.state~.
+
+        :param state: the current state, in dict format.
         :param taxi_name: name of the taxi.
         :return: list of moves for the taxi.
         """
@@ -254,9 +283,9 @@ class Agent:
 
         # "move" actions
         # TODO: Try to make a simpler check on 'move' action by using the graph.neighbors function.
-        row = self.state["taxis"][taxi_name]["location"][0]
-        column = self.state["taxis"][taxi_name]["location"][1]
-        if self.state["taxis"][taxi_name]["fuel"] > 0:
+        row = state["taxis"][taxi_name]["location"][0]
+        column = state["taxis"][taxi_name]["location"][1]
+        if state["taxis"][taxi_name]["fuel"] > 0:
             if row > 0 and self.map[row - 1][column] != 'I':
                 available_actions.append(("move", taxi_name, (row - 1, column)))
             if row < self.map_shape[0] - 1 and self.map[row + 1][column] != 'I':
@@ -271,17 +300,17 @@ class Agent:
             available_actions.append(("refuel", taxi_name))
 
         # "pick up" actions
-        if 0 < self.state["taxis"][taxi_name]["capacity"]:
+        if 0 < state["taxis"][taxi_name]["capacity"]:
             for passenger in self.passengers_names:
-                if self.state["passengers"][passenger]["location"] == (row, column) and \
-                        self.state["passengers"][passenger]["location"] != \
-                        self.state["passengers"][passenger]["destination"]:
+                if state["passengers"][passenger]["location"] == (row, column) and \
+                        state["passengers"][passenger]["location"] != \
+                        state["passengers"][passenger]["destination"]:
                     available_actions.append(("pick up", taxi_name, passenger))
 
         # "drop off" actions
         for passenger in self.passengers_names:
-            if self.state["passengers"][passenger]["location"] == taxi_name and \
-                    self.state["passengers"][passenger]["destination"] == (row, column):
+            if state["passengers"][passenger]["location"] == taxi_name and \
+                    state["passengers"][passenger]["destination"] == (row, column):
                 available_actions.append(("drop off", taxi_name, passenger))
 
         available_actions.append(("wait", taxi_name))
@@ -292,66 +321,83 @@ class Agent:
         Returns all the actions that can be executed in the given state.
         The result should be a tuple (or other iterable) of actions
         as defined in the problem description file.
+
+        :param state: the current state, in dict format.
         """
-        if state is not None:
-            self.decode_state(state)
 
-        taxi_loc = dict((taxi_name, taxi_values["location"]) for taxi_name, taxi_values in self.state["taxis"].items())
+        taxi_loc = dict((taxi_name, taxi_values["location"]) for taxi_name, taxi_values in state["taxis"].items())
+        for action in filter(lambda a: self.is_action_legal(state, a, taxis_location_dict=taxi_loc),
+                             product(*[self.get_atomic_actions(state, taxi) for taxi in self.taxi_names])):
+            yield action
 
-        yield filter(lambda a: self.is_action_legal(a, taxis_location_dict=taxi_loc),
-                     product(*[self.get_atomic_actions(taxi) for taxi in self.taxi_names]))
         yield "reset"
         yield "terminate"
 
-    def result(self, state=None, action=None, inplace=True, return_encoded=True):
-        """ Returns the state that results from executing the given action in the given state.
-        The action must be one of self.actions(state). """
-        # TODO: can we replace this with the result function in check.py???
-        if action == "reset":
-            ttg = self.state["turns to go"]
-            self.state = deepcopy(self.initial_state)
-            self.state["turns to go"] = ttg
-            return
-        if action == "terminate":
-            return
-        if state is None:
-            self.decode_state()
-        for taxi_action in action:
-            if taxi_action[0] == "move":
-                self.state["taxis"][taxi_action[1]]["location"] = taxi_action[2]
-                self.state["taxis"][taxi_action[1]]["fuel"] -= 1
-            elif taxi_action[0] == "pick up":
-                self.state["passengers"][taxi_action[2]]["location"] = taxi_action[1]
-                self.state["taxis"][taxi_action[1]]["capacity"] -= 1
-            elif taxi_action[0] == "drop off":
-                self.state["passengers"][taxi_action[2]]["location"] = self.state["taxis"][taxi_action[1]]["location"]
-                self.state["taxis"][taxi_action[1]]["capacity"] += 1
-            elif taxi_action[0] == "refuel":
-                self.state["taxis"][taxi_action[1]]["fuel"] = self.initial_state["taxis"][taxi_action[1]]["fuel"]
+    def result(self, state, action, into_self_state=True, return_encoded=True):
+        """
+        Returns the deterministic state that results from executing the given action in the given state.
+        The action must be one of self.actions(state).
 
-        self.state["turns to go"] -= 1
+        :param state: the current state, in dict format.
+        :param action: the action to perform.
+        :param into_self_state: if True override ~self.state~ with resulting state,
+            else return a deepcopy of ~self.state~ with resulting state changes.
+        :param return_encoded: if True return encoded result, else return in dict format.
+        """
+        state_copy = deepcopy(state)
+        if into_self_state:
+            self.state = state_copy
+            new_state = self.state
+        else:
+            new_state = state_copy
+
+        ttg = new_state["turns to go"]
+        if action == "reset":
+            new_state = deepcopy(self.initial_state)
+            new_state["turns to go"] = ttg - 1
+        elif action == "terminate":
+            new_state = TERMINAL_STATE
+        else:
+            for taxi_action in action:
+                if taxi_action[0] == "move":
+                    new_state["taxis"][taxi_action[1]]["location"] = taxi_action[2]
+                    new_state["taxis"][taxi_action[1]]["fuel"] -= 1
+                elif taxi_action[0] == "pick up":
+                    new_state["passengers"][taxi_action[2]]["location"] = taxi_action[1]
+                    new_state["taxis"][taxi_action[1]]["capacity"] -= 1
+                elif taxi_action[0] == "drop off":
+                    new_state["passengers"][taxi_action[2]]["location"] = new_state["taxis"][taxi_action[1]]["location"]
+                    new_state["taxis"][taxi_action[1]]["capacity"] += 1
+                elif taxi_action[0] == "refuel":
+                    new_state["taxis"][taxi_action[1]]["fuel"] = self.initial_state["taxis"][taxi_action[1]]["fuel"]
+
+            new_state["turns to go"] = ttg - 1
 
         if return_encoded:
-            return self.encode_state()
+            return self.encode_state(new_state)
         else:
-            if not inplace:
-                return deepcopy(self.state)
+            return new_state
 
-    def possible_results(self, state, action):
+    def possible_results(self, state: dict, action):
         """
         Returns all possible states that result from executing the given action in the given state.
         The action must be one of self.actions(state).
-        Note: the state is given at dictionary format.
+        :param state: the current state, in dict format.
+        :param action: the action to perform.
         """
+        if action == "terminate" or action == "reset":
+            terminal_state = self.result(state=state, action=action, into_self_state=False, return_encoded=False)
+            return [terminal_state, ]
 
-        self.result(state, action, inplace=True, return_encoded=False)
-        for destinations in product(*[set(self.state["passengers"][p]["possible_goals"]).union(
-                self.state["passengers"][p]["destination"]) for p in self.passengers_names]):
+        state = self.result(state, action, into_self_state=False, return_encoded=False)
+        possible_destinations = [list(set(state["passengers"][p]["possible_goals"]).union(
+            {state["passengers"][p]["destination"]})) for p in self.passengers_names]
+        for destinations in product(*possible_destinations):
 
             for passenger, destination in zip(self.passengers_names, destinations):
-                self.state["passengers"][passenger]["destination"] = destination
+                state["passengers"][passenger]["destination"] = destination
 
-            yield deepcopy(self.state)
+            yield deepcopy(state)
 
     def act(self, state):
         """ The Agent's policy function. """
@@ -366,41 +412,86 @@ class OptimalTaxiAgent(Agent):
         self.value_iteration()
 
     def get_all_states(self, state, visited):
-        if state["turns to go"] < 0:
-            return
         s = self.encode_state(state)
+
+        if state["turns to go"] == 0:
+            nx.set_node_attributes(self.states, {s: 0}, "value")
+            return
         for action in self.actions(state):
+            action_reward = self.reward(action)
             for sweet_summer_child in self.possible_results(state, action):
                 s_child = self.encode_state(sweet_summer_child)
                 self.states.add_edge(u_of_edge=s,
                                      v_of_edge=s_child,
                                      action=action,
-                                     value=self.reward(action),
+                                     reward=action_reward,
                                      transition_probability=self.transition(state, action, sweet_summer_child))
                 if s_child not in visited:
                     visited.add(s_child)
-                    self.get_all_states(state=sweet_summer_child, visited=visited)
-
-        best_neighbor = max([n for n in self.states.successors(s)],
-                            key=lambda n: self.states[s][n]["value"])
-        self.states[s]["policy"] = self.states[s][best_neighbor]["action"]
+                    self.get_all_states(state=sweet_summer_child,
+                                        visited=visited)
 
     def value_iteration(self):
-        pass
+
+        # Iterate over all nodes in the tree in a depth-first order
+        for s in nx.dfs_postorder_nodes(self.states):
+            # Compute the value of node s as the maximum expected value over all outgoing edges (s, u) from s
+            successors = list(self.states.successors(s))
+            if successors:
+                self.states.nodes[s]['value'], self.states.nodes[s]['policy'] = max(
+                    (self.states[s][u]['reward'] + self.states.nodes[u]['value'], self.states.edges[s, u]['action'])
+                    for u in successors)
+            else:
+                self.states.nodes[s]['policy'] = max(list(self.actions(self.decode_state(s))),
+                                                     key=lambda a: self.reward(a))
+                self.states.nodes[s]['value'] = self.reward(self.states.nodes[s]['policy'])
 
     def policy_iteration(self):
-        pass
+        # Initialize the value function for all nodes to 0
+        policy = {s: max([u for u in self.states.successors(s)],
+                         key=lambda u: self.reward(self.states.edges[s, u]['action']))
+                  for s in self.states.nodes}
+        V = {s: max(self.reward(a) for a in list(self.actions(self.decode_state(s)))) for s in self.states.nodes()}
 
-    def hybrid_iteration(self):
+        # Iterate until the policy has converged
+        while True:
+            # Evaluate the current policy by iterating over all nodes in the tree in a depth-first order
+            for s in nx.dfs_postorder_nodes(self.states):
+                # Compute the value V(s) of node s as the expected value of the reward and next value over the optimal
+                # action
+                V[s] = self.states[s][policy[s]]['reward'] + V[policy[s]]
+                # Save the value of s as a node attribute
+                self.states.nodes[s]['value'] = V[s]
+                # Save the optimal policy for s as a node attribute
+                self.states.nodes[s]['policy'] = self.states[s][policy[s]]['action']
+
+            # Check if the policy has converged by comparing the old and new policies
+            policy_converged = True
+            for s in nx.dfs_preorder_nodes(self.states):
+                # Compute the expected value of the reward and next value for each action
+                values = [self.states[s][u]['reward'] + V[u] for u in self.states.successors(s)]
+                # Select the action with the maximum expected value
+                _, action = max(zip(values, self.states.successors(s)))
+                if action != policy[s]:
+                    policy[s] = action
+                    # If the policy has changed, mark the policy as not converged
+                    policy_converged = False
+            # If the policy has converged, break out of the loop
+            if policy_converged:
+                break
+        return
+
+    def hybrid_iteration(self, state):
         pass
 
     def act(self, state):
-        raise NotImplemented
+        return self.states.nodes[self.encode_state(state)]["policy"]
 
 
 class TaxiAgent(Agent):
     def __init__(self, initial):
         Agent.__init__(self, initial)
+        self.default_agent = OptimalTaxiAgent(initial)
 
     def act(self, state):
-        raise NotImplemented
+        return self.default_agent.act(state)
