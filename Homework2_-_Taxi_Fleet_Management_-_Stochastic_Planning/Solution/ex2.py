@@ -410,6 +410,7 @@ class OptimalTaxiAgent(Agent):
         self.states = nx.DiGraph()
         self.get_all_states(state=self.initial_state, visited={self.encode_state(self.initial_state)})
         self.value_iteration()
+        print("initial state value: ", self.states.nodes[self.encode_state(self.initial_state)]['value'])
 
     def get_all_states(self, state, visited):
         s = self.encode_state(state)
