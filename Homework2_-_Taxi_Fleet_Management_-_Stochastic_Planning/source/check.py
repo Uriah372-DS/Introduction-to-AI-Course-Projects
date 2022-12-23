@@ -107,7 +107,7 @@ class TaxiStochasticProblem:
             """
             taxi_name = refuel_action[1]
             i, j = self.state['taxis'][taxi_name]['location']
-            if self.state['map'][i][j] == 'G':
+            if self.state['map'][i][j] == 'game_tree':
                 return True
             else:
                 return False

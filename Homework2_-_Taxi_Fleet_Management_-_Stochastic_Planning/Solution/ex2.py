@@ -9,7 +9,6 @@ ids = ["322691718", "313539850"]
 RESET_PENALTY = 50
 REFUEL_PENALTY = 10
 DROP_IN_DESTINATION_REWARD = 100
-TERMINAL_STATE = {"turns to go": 0}
 
 
 class Agent:
@@ -136,7 +135,7 @@ class Agent:
 
         probability = 1
         if action == "terminate":
-            probability = float(new_state == TERMINAL_STATE)
+            probability = float(new_state["turns to go"] == 0)
         elif action == "reset":
             self.result(state, action, into_self_state=True, return_encoded=False)
             encoded_new_state = self.encode_state(new_state)
@@ -204,7 +203,7 @@ class Agent:
             """ check if taxi in gas location. """
             taxi_name = refuel_action[1]
             i, j = state['taxis'][taxi_name]['location']
-            if self.map[i][j] == 'G':
+            if self.map[i][j] == 'game_tree':
                 return True
             else:
                 return False
@@ -296,7 +295,7 @@ class Agent:
                 available_actions.append(("move", taxi_name, (row, column + 1)))
 
         # "refuel" actions
-        if self.map[row][column] == "G":
+        if self.map[row][column] == "game_tree":
             available_actions.append(("refuel", taxi_name))
 
         # "pick up" actions
@@ -356,7 +355,8 @@ class Agent:
             new_state = deepcopy(self.initial_state)
             new_state["turns to go"] = ttg - 1
         elif action == "terminate":
-            new_state = TERMINAL_STATE
+            new_state = deepcopy(self.initial_state)
+            new_state["turns to go"] = 0
         else:
             for taxi_action in action:
                 if taxi_action[0] == "move":
@@ -380,7 +380,7 @@ class Agent:
 
     def possible_results(self, state: dict, action):
         """
-        Returns all possible states that result from executing the given action in the given state.
+        Returns all possible game_tree that result from executing the given action in the given state.
         The action must be one of self.actions(state).
         :param state: the current state, in dict format.
         :param action: the action to perform.
@@ -407,86 +407,143 @@ class Agent:
 class OptimalTaxiAgent(Agent):
     def __init__(self, initial):
         Agent.__init__(self, initial)
-        self.states = nx.DiGraph()
-        self.get_all_states(state=self.initial_state, visited={self.encode_state(self.initial_state)})
-        self.value_iteration()
-        print("initial state value: ", self.states.nodes[self.encode_state(self.initial_state)]['value'])
+        self.game_tree = nx.DiGraph()
+        self.build_game_tree(state=self.initial_state,
+                             policy_finder=self.value_iteration)
+        print("initial state value: ", self.game_tree.nodes[self.encode_state(self.initial_state)]['value'])
 
-    def get_all_states(self, state, visited):
+    def build_game_tree(self, state, policy_finder):
+        """
+        Recursively build a game tree represented as a NetworkX DiGraph, starting from the given initial state.
+        The function uses a depth-first search algorithm to explore the tree.
+
+        Parameters
+        ----------
+        state : dict
+            The state of the game to explore.
+        policy_finder : function
+            the method that finds the optimal policy.
+
+        Returns
+        -------
+            None
+        """
+
+        # rewind on terminal states
         s = self.encode_state(state)
-
         if state["turns to go"] == 0:
-            nx.set_node_attributes(self.states, {s: 0}, "value")
+            self.game_tree.add_node(s,
+                                    value=0.0,
+                                    policy=None)
             return
+
+        s = self.encode_state(state)
+        # add current state to the game tree
+        self.game_tree.add_node(s, value=0.0, policy=None)
+        # for every performable action, explore all possible successors of the current state
         for action in self.actions(state):
+            # calculate the reward for the current action
             action_reward = self.reward(action)
+            # for every unexplored child state, add it's game subtree to the game tree and then connect it to this state
             for sweet_summer_child in self.possible_results(state, action):
                 s_child = self.encode_state(sweet_summer_child)
-                self.states.add_edge(u_of_edge=s,
-                                     v_of_edge=s_child,
-                                     action=action,
-                                     reward=action_reward,
-                                     transition_probability=self.transition(state, action, sweet_summer_child))
-                if s_child not in visited:
-                    visited.add(s_child)
-                    self.get_all_states(state=sweet_summer_child,
-                                        visited=visited)
+                # explore child subtree if not explored yet
+                if s_child not in self.game_tree.nodes:
+                    self.build_game_tree(state=sweet_summer_child,
+                                         policy_finder=policy_finder)
+                # connect subtree to main game tree
+                self.game_tree.add_edge(u_of_edge=s,
+                                        v_of_edge=s_child,
+                                        action=action,
+                                        reward=action_reward,
+                                        transition_probability=self.transition(state,
+                                                                               action,
+                                                                               sweet_summer_child))
+        policy_finder(s)
 
-    def value_iteration(self):
+    def value_iteration(self, s):
+        # Compute the value of node s as the maximum expected value over all outgoing edges (s, u) from s
+        successors = list(self.game_tree.successors(s))
+        if successors:
+            self.game_tree.nodes[s]['value'], self.game_tree.nodes[s]['policy'] = max(
+                (self.game_tree[s][u]['reward'] + self.game_tree.nodes[u]['value'],
+                 self.game_tree.edges[s, u]['action'])
+                for u in successors)
+        else:
+            self.game_tree.nodes[s]['policy'] = max(list(self.actions(self.decode_state(s))),
+                                                    key=lambda a: self.reward(a))
+            self.game_tree.nodes[s]['value'] = self.reward(self.game_tree.nodes[s]['policy'])
 
-        # Iterate over all nodes in the tree in a depth-first order
-        for s in nx.dfs_postorder_nodes(self.states):
-            # Compute the value of node s as the maximum expected value over all outgoing edges (s, u) from s
-            successors = list(self.states.successors(s))
-            if successors:
-                self.states.nodes[s]['value'], self.states.nodes[s]['policy'] = max(
-                    (self.states[s][u]['reward'] + self.states.nodes[u]['value'], self.states.edges[s, u]['action'])
-                    for u in successors)
-            else:
-                self.states.nodes[s]['policy'] = max(list(self.actions(self.decode_state(s))),
-                                                     key=lambda a: self.reward(a))
-                self.states.nodes[s]['value'] = self.reward(self.states.nodes[s]['policy'])
+    def policy_iteration(self, discount_factor=1.0):
+        """
+        Perform policy iteration on a game tree represented as a NetworkX DiGraph.
+        The actions between game_tree are given as edge attributes on the DiGraph.
+        The values and optimal policy are saved as node attributes on the DiGraph.
 
-    def policy_iteration(self):
-        # Initialize the value function for all nodes to 0
-        policy = {s: max([u for u in self.states.successors(s)],
-                         key=lambda u: self.reward(self.states.edges[s, u]['action']))
-                  for s in self.states.nodes}
-        V = {s: max(self.reward(a) for a in list(self.actions(self.decode_state(s)))) for s in self.states.nodes()}
+        Parameters
+        ----------
+        discount_factor : float (default: 1.0)
+            The discount factor to use in the policy iteration algorithm.
 
-        # Iterate until the policy has converged
+        Returns
+        -------
+        None
+        """
+        # Initialize the values of all nodes to 0
+        for node in self.game_tree.nodes():
+            self.game_tree.nodes[node]["value"] = 0.0
+
+        # Initialize the policy of all nodes to None
+        for node in self.game_tree.nodes():
+            self.game_tree.nodes[node]["policy"] = None
+
+        # Set the values of the leaf nodes (terminal game_tree)
+        for node in self.game_tree.nodes():
+            if not self.game_tree.successors(node):
+                # Set the value of the node to the reward associated with the edge leading to the node
+                self.game_tree.nodes[node]["value"] = \
+                    self.game_tree[node][self.game_tree.predecessors(node)[0]]["reward"]
+
+        # Perform policy iteration
         while True:
-            # Evaluate the current policy by iterating over all nodes in the tree in a depth-first order
-            for s in nx.dfs_postorder_nodes(self.states):
-                # Compute the value V(s) of node s as the expected value of the reward and next value over the optimal
-                # action
-                V[s] = self.states[s][policy[s]]['reward'] + V[policy[s]]
-                # Save the value of s as a node attribute
-                self.states.nodes[s]['value'] = V[s]
-                # Save the optimal policy for s as a node attribute
-                self.states.nodes[s]['policy'] = self.states[s][policy[s]]['action']
+            # Evaluate the current policy
+            stable = True
+            for node in nx.dfs_postorder_nodes(self.game_tree):
+                if not list(self.game_tree.successors(node)):
+                    # Skip leaf nodes
+                    continue
 
-            # Check if the policy has converged by comparing the old and new policies
-            policy_converged = True
-            for s in nx.dfs_preorder_nodes(self.states):
-                # Compute the expected value of the reward and next value for each action
-                values = [self.states[s][u]['reward'] + V[u] for u in self.states.successors(s)]
-                # Select the action with the maximum expected value
-                _, action = max(zip(values, self.states.successors(s)))
-                if action != policy[s]:
-                    policy[s] = action
-                    # If the policy has changed, mark the policy as not converged
-                    policy_converged = False
-            # If the policy has converged, break out of the loop
-            if policy_converged:
+                # Calculate the expected value of each action based on the values of the resulting game_tree
+                action_values = {}
+                for successor, edge_attributes in self.game_tree[node].items():
+                    action_values[edge_attributes['action']] = self.game_tree.nodes[successor]["value"] * \
+                                                               edge_attributes["transition_probability"]
+
+                # Select the action with the highest expected value as the optimal action for the current state
+                optimal_action = max(action_values, key=action_values.get)
+
+                # Update the value and policy of the node if they have changed
+                if self.game_tree.nodes[node]["policy"] != optimal_action:
+                    self.game_tree.nodes[node]["policy"] = optimal_action
+                    stable = False
+                if abs(self.game_tree.nodes[node]["value"] - action_values[optimal_action]) > 1e-6:
+                    self.game_tree.nodes[node]["value"] = action_values[optimal_action]
+                    stable = False
+
+            if stable:
+                # The policy has converged, so we can stop iterating
                 break
-        return
+
+        # Discount the values of the nodes based on the discount factor
+        for node in self.game_tree.nodes():
+            if self.game_tree.successors(node):
+                self.game_tree.nodes[node]["value"] /= discount_factor
 
     def hybrid_iteration(self, state):
         pass
 
     def act(self, state):
-        return self.states.nodes[self.encode_state(state)]["policy"]
+        return self.game_tree.nodes[self.encode_state(state)]["policy"]
 
 
 class TaxiAgent(Agent):

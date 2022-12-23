@@ -3,7 +3,7 @@ small_inputs = [
     {  # 1
         "optimal": True,
         "map": [['P', 'P', 'P'],
-                ['P', 'G', 'P'],
+                ['P', 'game_tree', 'P'],
                 ['P', 'P', 'P']],
         "taxis": {'taxi 1': {"location": (0, 0), "fuel": 10, "capacity": 1}},
         "passengers": {'Dana': {"location": (2, 2), "destination": (0, 0),
@@ -14,7 +14,7 @@ small_inputs = [
     {  # 2
         "optimal": True,
         "map": [['P', 'P', 'P'],
-                ['P', 'G', 'P'],
+                ['P', 'game_tree', 'P'],
                 ['P', 'P', 'P']],
         "taxis": {'taxi 1': {"location": (0, 0), "fuel": 3, "capacity": 1}},
         "passengers": {'Dana': {"location": (2, 2), "destination": (0, 0),
@@ -24,9 +24,9 @@ small_inputs = [
     # 3x3 2 taxi, 2 passengers w/ 1 possible goals, low fuel
     {  # 3
         "optimal": False,
-        "map": [['P', 'P', 'G'],
+        "map": [['P', 'P', 'game_tree'],
                 ['P', 'P', 'P'],
-                ['G', 'P', 'P']],
+                ['game_tree', 'P', 'P']],
         "taxis": {'taxi 1': {"location": (0, 0), "fuel": 3, "capacity": 1},
                   'taxi 2': {"location": (0, 1), "fuel": 3, "capacity": 1}},
         "passengers": {'Dana': {"location": (0, 2), "destination": (2, 2),
@@ -40,7 +40,7 @@ small_inputs = [
     {  # 4
         "optimal": False,
         "map": [['P', 'P', 'P', 'P'],
-                ['I', 'I', 'I', 'G'],
+                ['I', 'I', 'I', 'game_tree'],
                 ['P', 'P', 'P', 'P']],
         "taxis": {'taxi 1': {"location": (0, 0), "fuel": 8, "capacity": 1}},
         "passengers": {'Dana': {"location": (2, 0), "destination": (0, 0),

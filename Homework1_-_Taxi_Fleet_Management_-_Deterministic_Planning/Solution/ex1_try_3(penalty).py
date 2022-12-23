@@ -25,7 +25,7 @@ class TaxiProblem(search.Problem):
         self.gas_stations = [(i, j)
                              for i in range(self.map_shape[0])
                              for j in range(self.map_shape[1])
-                             if initial["map"][i][j] == "G"]
+                             if initial["map"][i][j] == "game_tree"]
         self.impassable = [(i, j)
                            for i in range(self.map_shape[0])
                            for j in range(self.map_shape[1])
@@ -88,7 +88,7 @@ class TaxiProblem(search.Problem):
                 available_moves.append(("move", taxi_name, (row, column + 1)))
 
         # "refuel" actions
-        if self.state["map"][row][column] == "G":
+        if self.state["map"][row][column] == "game_tree":
             available_moves.append(("refuel", taxi_name))
 
         # "pick up" actions

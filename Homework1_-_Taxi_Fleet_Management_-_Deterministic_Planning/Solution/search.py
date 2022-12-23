@@ -125,7 +125,7 @@ class Node:
         return list(reversed(path_back))
 
     # We want for a queue of nodes in breadth_first_search or
-    # astar_search to have no duplicated states, so we treat nodes
+    # astar_search to have no duplicated game_tree, so we treat nodes
     # with the same state as equal. [Problem: this may not be what you
     # want in other contexts.]
 
