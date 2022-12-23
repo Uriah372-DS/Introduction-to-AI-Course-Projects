@@ -76,7 +76,7 @@ def main():
         {
             "map": [['P', 'P', 'P', 'P'],
                     ['P', 'P', 'P', 'P'],
-                    ['P', 'I', 'game_tree', 'P'],
+                    ['P', 'I', 'G', 'P'],
                     ['P', 'P', 'P', 'P'], ],
             "taxis": {'taxi 1': {"location": (3, 3),
                                  "fuel": 15,
@@ -91,7 +91,7 @@ def main():
         {
             "map": [['P', 'P', 'I', 'P'],
                     ['P', 'P', 'P', 'P'],
-                    ['P', 'I', 'game_tree', 'P'],
+                    ['P', 'I', 'G', 'P'],
                     ['P', 'P', 'P', 'P'], ],
             "taxis": {'taxi 1': {"location": (3, 3),
                                  "fuel": 15,

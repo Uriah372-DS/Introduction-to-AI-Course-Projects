@@ -95,7 +95,7 @@ class TaxiProblem(search.Problem):
                 available_moves.append(("move", taxi_name, (row, column + 1)))
 
         # "refuel" actions
-        if state["map"][row][column] == "game_tree":
+        if state["map"][row][column] == "G":
             available_moves.append(("refuel", taxi_name))
 
         # "pick up" actions

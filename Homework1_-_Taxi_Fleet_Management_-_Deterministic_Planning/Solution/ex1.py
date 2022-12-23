@@ -3,7 +3,6 @@ import random
 import math
 from itertools import product
 import networkx as nx
-import stockfish
 
 ids = ["322691718", "313539850"]
 
@@ -21,7 +20,7 @@ def get_graph(map: list[list[str]], map_shape: tuple) -> nx.Graph:
     for i in range(map_shape[0]):
         for j in range(map_shape[1]):
             if map[i][j] != "I":
-                g.add_node((i, j), is_gas=(map[i][j] == "game_tree"))
+                g.add_node((i, j), is_gas=(map[i][j] == "G"))
                 for k, l in [(i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)]:
                     if 0 <= k < map_shape[0] and 0 <= l < map_shape[1]:
                         if map[k][l] != "I":
@@ -41,7 +40,7 @@ class TaxiProblem(search.Problem):
         self.gas_stations = [(i, j)
                              for i in range(self.map_shape[0])
                              for j in range(self.map_shape[1])
-                             if initial["map"][i][j] == "game_tree"]
+                             if initial["map"][i][j] == "G"]
 
         self.unsolvable = False
         for passenger in initial["passengers"].keys():
@@ -115,7 +114,7 @@ class TaxiProblem(search.Problem):
                 available_moves.append(("move", taxi_name, (row, column + 1)))
 
         # "refuel" actions
-        if self.state["map"][row][column] == "game_tree":
+        if self.state["map"][row][column] == "G":
             available_moves.append(("refuel", taxi_name))
 
         # "pick up" actions
@@ -324,7 +323,7 @@ class TaxiProblem(search.Problem):
     # def h_graph(self, node):
     #     counter = 0
     #     for passenger in self.passengers_names:
-    #         counter += nx.astar_path_length(game_tree=self.graph,
+    #         counter += nx.astar_path_length(G=self.graph,
     #                                         source=self.state["passengers"][passenger]["location"],
     #                                         target=self.state["passengers"][passenger]["destination"])
     #     return counter / self.fleet_capacity
