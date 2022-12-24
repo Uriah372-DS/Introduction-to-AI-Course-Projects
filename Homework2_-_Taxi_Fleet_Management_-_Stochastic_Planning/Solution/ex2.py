@@ -1,8 +1,9 @@
-import random
-
 import networkx as nx
 from copy import deepcopy
 from itertools import product
+from collections import deque
+
+# import matplotlib.pyplot as plt; nx.draw(self.game_graph); plt.show()
 
 ids = ["322691718", "313539850"]
 
@@ -13,7 +14,6 @@ DROP_IN_DESTINATION_REWARD = 100
 
 class Agent:
     """ This is a general Agent class that has all the common operations of the Agents. Avoids code duplication. """
-
     def __init__(self, initial):
         """
         Base constructor.
@@ -29,187 +29,180 @@ class Agent:
         initial_copy = deepcopy(initial)
         self.map = deepcopy(initial_copy["map"])
         self.map_shape = (len(self.map), len(self.map[0]))
+        self.map_graph = self.build_map_graph()
         del initial_copy["map"]
-        self.initial_state = deepcopy(initial_copy)
-        self.state = deepcopy(self.initial_state)
-        self.graph = self.build_graph()
-        self.taxi_names = list(self.state["taxis"].keys())
-        self.passengers_names = list(self.state["passengers"].keys())
+        del initial_copy["optimal"]
+        self.taxi_names = list(initial_copy["taxis"].keys())
+        self.passengers_names = list(initial_copy["passengers"].keys())
+        self.possible_goals = {p_name: initial_copy["passengers"][p_name]["possible_goals"]
+                               for p_name in self.passengers_names}
+        self.prob_change_goal = {p_name: initial_copy["passengers"][p_name]["prob_change_goal"]
+                                 for p_name in self.passengers_names}
+        for p_name in self.passengers_names:
+            del initial_copy["passengers"][p_name]["possible_goals"]
+            del initial_copy["passengers"][p_name]["prob_change_goal"]
+
+        self.initial_state = initial_copy
         self.encoded_initial_state = self.encode_state(self.initial_state)
 
-    def build_graph(self):
-        """ build the graph of the problem. """
-        g = nx.grid_graph(self.map_shape)
+    def build_map_graph(self):
+        """ build a graph of the map. """
+        g = nx.grid_graph((self.map_shape[1], self.map_shape[0]))
         nodes_to_remove = []
-        for node in g:
+        for node in g.nodes:
             if self.map[node[0]][node[1]] == 'I':
                 nodes_to_remove.append(node)
         for node in nodes_to_remove:
             g.remove_node(node)
         return g
 
-    def encode_state(self, state=None):
+    def encode_state(self, state):
         """
-        encode state in a safe format.
-        :returns: tuple.
-            the encoded state.
+        Returns this state in encoded format (tuple of tuples).
+
+        Parameters
+        ----------
+        state : dict
+            The state to encode.
+
+        Returns
+        -------
+        encoded_state : tuple
+            The encoded state.
         """
-        if state:
-            self.state = state
         taxis = tuple(
             (
                 taxi_name,
-                self.state["taxis"][taxi_name]["location"],
-                self.state["taxis"][taxi_name]["fuel"],
-                self.state["taxis"][taxi_name]["capacity"]
+                state["taxis"][taxi_name]["location"],
+                state["taxis"][taxi_name]["fuel"],
+                state["taxis"][taxi_name]["capacity"]
             )
             for taxi_name in self.taxi_names)
 
         passengers = tuple(
             (
                 passenger_name,
-                self.state["passengers"][passenger_name]["location"],
-                self.state["passengers"][passenger_name]["destination"]
+                state["passengers"][passenger_name]["location"],
+                state["passengers"][passenger_name]["destination"]
             )
             for passenger_name in self.passengers_names)
 
-        new_state = (taxis, passengers, self.state["turns to go"])
+        encoded_state = (taxis, passengers, state["turns to go"])
+
+        return encoded_state
+
+    def decode_state(self, state):
+        """
+        Return encoded state to dict format.
+
+        Parameters
+        ----------
+        state : tuple
+            The state to decode.
+
+        Returns
+        -------
+        decoded_state : dict
+            The decoded state.
+        """
+        decoded_state = {"taxis": {}, "passengers": {}}
+
+        for taxi_name, location, fuel, capacity in state[0]:
+            decoded_state["taxis"][taxi_name] = {"location": location,
+                                                 "fuel": fuel,
+                                                 "capacity": capacity}
+
+        for passenger_name, location, destination in state[1]:
+            decoded_state["passengers"][passenger_name] = {"location": location,
+                                                           "destination": destination}
+
+        decoded_state["turns to go"] = state[2]
+        return decoded_state
+
+    def copy_state(self, state):
+        new_state = {"taxis": {}, "passengers": {}}
+        for taxi_name in self.taxi_names:
+            new_state["taxis"][taxi_name] = {"location": state["taxis"][taxi_name]["location"],
+                                             "fuel": state["taxis"][taxi_name]["fuel"],
+                                             "capacity": state["taxis"][taxi_name]["capacity"]}
+
+        for p_name in self.passengers_names:
+            new_state["passengers"][p_name] = {
+                "location": state["passengers"][p_name]["location"],
+                "destination": state["passengers"][p_name]["destination"]
+            }
+        new_state["turns to go"] = state["turns to go"]
 
         return new_state
 
-    def decode_state(self, state=None, into_self_state=True):
+    def is_action_legal(self, state, action):
         """
-        return state to operational format.
-        :param state: the state | None
-        :param into_self_state: if True - decode state contents into ~self.state~,
-            else decode state contents into a copy of ~self.state~.
-        :return: if into_self_state = False - return Operational state, else return None
-        """
-        if into_self_state:
-            for taxi_name, location, fuel, capacity in state[0]:
-                self.state["taxis"][taxi_name]["location"] = location
-                self.state["taxis"][taxi_name]["fuel"] = fuel
-                self.state["taxis"][taxi_name]["capacity"] = capacity
+        Check if the action is legal to perform on the state.
 
-            for passenger_name, location, destination in state[1]:
-                self.state["passengers"][passenger_name]["location"] = location
-                self.state["passengers"][passenger_name]["destination"] = destination
-            self.state["turns to go"] = state[2]
-            return self.state
-        else:
-            new_state = deepcopy(self.state)
-            for taxi_name, location, fuel, capacity in state[0]:
-                new_state["taxis"][taxi_name]["location"] = location
-                new_state["taxis"][taxi_name]["fuel"] = fuel
-                new_state["taxis"][taxi_name]["capacity"] = capacity
+        NOTICE!!!
+        ------
+        This function doesn't consider the remaining turns from the given state,
+        it merely checks if the instructions are satisfied.
 
-            for passenger_name, location, destination in state[1]:
-                new_state["passengers"][passenger_name]["location"] = location
-                new_state["passengers"][passenger_name]["destination"] = destination
-            new_state["turns to go"] = state[2]
-            return new_state
+        Parameters
+        ----------
+        state : dict
+            The state, in dict format.
+        action : tuple
+            The action to check.
 
-    def reward(self, action):
-        """ The function that calculates reward of performing this action on a state. """
-        if action == "reset":
-            return -RESET_PENALTY
-        elif action == "terminate":
-            return 0
-        score = 0
-        for atomic_action in action:
-            if atomic_action[0] == "drop off":
-                score += DROP_IN_DESTINATION_REWARD
-            elif atomic_action[0] == "refuel":
-                score -= REFUEL_PENALTY
-        return score
-
-    def transition(self, state, action, new_state):
-        """
-        The function that calculates the probability of getting to new_state from state by performing action.
-        :param state: current state, in dict format.
-        :param action: the action to perform.
-        :param new_state: possible new state, in dict format.
-        :return: float.
-            the probability to reach new_state from state using action.
-        """
-
-        probability = 1
-        if action == "terminate":
-            probability = float(new_state["turns to go"] == 0)
-        elif action == "reset":
-            self.result(state, action, into_self_state=True, return_encoded=False)
-            encoded_new_state = self.encode_state(new_state)
-            probability = float(self.encoded_initial_state[0] == encoded_new_state[0] and
-                                self.encoded_initial_state[1] == encoded_new_state[1])
-        else:
-            self.result(state, action, into_self_state=True, return_encoded=False)
-
-            for passenger in self.passengers_names:
-                pc = self.state["passengers"][passenger]["prob_change_goal"]
-
-                if self.state["passengers"][passenger]["destination"] in \
-                        self.state["passengers"][passenger]["possible_goals"]:
-                    probability *= (pc / len(self.state["passengers"][passenger]["possible_goals"])) + (
-                            self.state["passengers"][passenger]["destination"] ==
-                            new_state["passengers"][passenger]["destination"]) * (1 - pc)
-                else:
-                    if self.state["passengers"][passenger]["destination"] == \
-                            new_state["passengers"][passenger]["destination"]:
-                        probability *= 1 - pc
-                    else:
-                        probability *= (pc / len(self.state["passengers"][passenger]["possible_goals"]))
-
-        return probability
-
-    def is_action_legal(self, state, action, taxis_location_dict):
-        """
-        check if the action is legal to perform on ~self.state~.
+        Returns
+        -------
+        bool
+            If the action is legal - returns True, else - returns False.
         """
 
         def _is_move_action_legal(atomic_move_action):
             taxi_name = atomic_move_action[1]
+            # validated at action creation
             if taxi_name not in self.taxi_names:
                 return False
+            # validated at action creation
             if state['taxis'][taxi_name]['fuel'] == 0:
                 return False
             l1 = state['taxis'][taxi_name]['location']
             l2 = atomic_move_action[2]
-            return l2 in list(self.graph.neighbors(l1))
+            # validated at action creation
+            return l2 in list(self.map_graph.neighbors(l1))
 
         def _is_pick_up_action_legal(pick_up_action):
             taxi_name = pick_up_action[1]
             passenger_name = pick_up_action[2]
-            # check same position
+            # check same position - validated at action creation
             if state['taxis'][taxi_name]['location'] != state['passengers'][passenger_name]['location']:
                 return False
-            # check taxi capacity
+            # check taxi capacity - validated at action creation
             if state['taxis'][taxi_name]['capacity'] <= 0:
                 return False
-            # check passenger is not in his destination
+            # check passenger is not in his destination - validated at action creation
             if state['passengers'][passenger_name]['destination'] == \
                     state['passengers'][passenger_name]['location']:
                 return False
             return True
 
         def _is_drop_action_legal(drop_action):
-            """ check same position. """
+            # check same position (and that the passenger is on the taxi). - validated at action creation
             taxi_name = drop_action[1]
             passenger_name = drop_action[2]
-            if state['taxis'][taxi_name]['location'] == state['passengers'][passenger_name]['destination']:
+            if state['passengers'][passenger_name]['location'] == taxi_name and \
+                    state['passengers'][passenger_name]['destination'] == state['taxis'][taxi_name]['location']:
                 return True
             return False
 
         def _is_refuel_action_legal(refuel_action):
-            """ check if taxi in gas location. """
+            # Check if taxi in gas station location. - validated at action creation
             taxi_name = refuel_action[1]
             i, j = state['taxis'][taxi_name]['location']
-            if self.map[i][j] == 'game_tree':
+            if self.map[i][j] == 'G':
                 return True
-            else:
-                return False
+            return False
 
         def _is_action_mutex(global_action):
-            # TODO: check if this condition is always false
             # one action per taxi
             if len(set([a[1] for a in global_action])) != len(global_action):
                 return True
@@ -221,48 +214,46 @@ class Agent:
                     return True
             return False
 
-        if action == "reset":
-            return True
-        if action == "terminate":
+        if action == "reset" or action == "terminate":
             return True
 
-        if len(action) != len(self.taxi_names):
+        if len(action) != len(self.taxi_names):  # validated at action creation
             return False
 
-        for atomic_action in action:
-
-            # illegal move action
-            if atomic_action[0] == 'move':
-                if not _is_move_action_legal(atomic_action):
-                    return False
-
-            # illegal pick action
-            elif atomic_action[0] == 'pick up':
-                if not _is_pick_up_action_legal(atomic_action):
-                    return False
-
-            # illegal drop action
-            elif atomic_action[0] == 'drop off':
-                if not _is_drop_action_legal(atomic_action):
-                    return False
-
-            # illegal refuel action
-            elif atomic_action[0] == 'refuel':
-                if not _is_refuel_action_legal(atomic_action):
-                    return False
-
-            elif atomic_action[0] != 'wait':
-                return False
-
-        # check mutex action
-        if _is_action_mutex(action):
-            return False
+        # for atomic_action in action:
+        #
+        #     # illegal move action - validated at action creation
+        #     if atomic_action[0] == 'move':
+        #         if not _is_move_action_legal(atomic_action):
+        #             return False
+        #
+        #     # illegal pick action - validated at action creation
+        #     elif atomic_action[0] == 'pick up':
+        #         if not _is_pick_up_action_legal(atomic_action):
+        #             return False
+        #
+        #     # illegal drop action - validated at action creation
+        #     elif atomic_action[0] == 'drop off':
+        #         if not _is_drop_action_legal(atomic_action):
+        #             return False
+        #
+        #     # illegal refuel action - validated at action creation
+        #     elif atomic_action[0] == 'refuel':
+        #         if not _is_refuel_action_legal(atomic_action):
+        #             return False
+        #     # wait action - validated at action creation
+        #     elif atomic_action[0] != 'wait':
+        #         return False
+        #
+        # # check mutex action
+        # if _is_action_mutex(action):
+        #     return False
 
         # check taxis collision
         if len(state['taxis']) > 1:
-
+            # create a mapping of taxi name to taxi location for all taxis in state
+            taxis_location_dict = dict([(t, state['taxis'][t]['location']) for t in self.taxi_names])
             move_actions = [a for a in action if a[0] == 'move']
-
             for move_action in move_actions:
                 taxis_location_dict[move_action[1]] = move_action[2]
 
@@ -270,134 +261,237 @@ class Agent:
                 return False
         return True
 
-    def get_atomic_actions(self, state, taxi_name):
+    def possible_atomic_actions(self, state, taxi_name):
         """
-        Return all possible actions that the given taxi can make in ~self.state~.
+        Return all possible actions that the given taxi can make in this state.
 
-        :param state: the current state, in dict format.
-        :param taxi_name: name of the taxi.
-        :return: list of moves for the taxi.
+        Parameters
+        ----------
+        state : dict
+            The state, in dict format.
+        taxi_name : tuple
+            The taxi's name.
+
+        Returns
+        -------
+        possible_actions : list
+            All atomic actions for the taxi.
         """
-        available_actions = []
+        possible_actions = []
 
         # "move" actions
-        # TODO: Try to make a simpler check on 'move' action by using the graph.neighbors function.
-        row = state["taxis"][taxi_name]["location"][0]
-        column = state["taxis"][taxi_name]["location"][1]
+        taxi_location = state["taxis"][taxi_name]["location"]
+        row, column = taxi_location
         if state["taxis"][taxi_name]["fuel"] > 0:
-            if row > 0 and self.map[row - 1][column] != 'I':
-                available_actions.append(("move", taxi_name, (row - 1, column)))
-            if row < self.map_shape[0] - 1 and self.map[row + 1][column] != 'I':
-                available_actions.append(("move", taxi_name, (row + 1, column)))
-            if column > 0 and self.map[row][column - 1] != 'I':
-                available_actions.append(("move", taxi_name, (row, column - 1)))
-            if column < self.map_shape[1] - 1 and self.map[row][column + 1] != 'I':
-                available_actions.append(("move", taxi_name, (row, column + 1)))
+            for loc in self.map_graph.neighbors(taxi_location):
+                possible_actions.append(("move", taxi_name, loc))
 
         # "refuel" actions
-        if self.map[row][column] == "game_tree":
-            available_actions.append(("refuel", taxi_name))
+        if self.map[row][column] == "G":
+            possible_actions.append(("refuel", taxi_name))
 
         # "pick up" actions
-        if 0 < state["taxis"][taxi_name]["capacity"]:
+        if state["taxis"][taxi_name]["capacity"] > 0:
             for passenger in self.passengers_names:
-                if state["passengers"][passenger]["location"] == (row, column) and \
+                if state["passengers"][passenger]["location"] == taxi_location and \
                         state["passengers"][passenger]["location"] != \
                         state["passengers"][passenger]["destination"]:
-                    available_actions.append(("pick up", taxi_name, passenger))
+                    possible_actions.append(("pick up", taxi_name, passenger))
 
         # "drop off" actions
         for passenger in self.passengers_names:
             if state["passengers"][passenger]["location"] == taxi_name and \
-                    state["passengers"][passenger]["destination"] == (row, column):
-                available_actions.append(("drop off", taxi_name, passenger))
+                    state["passengers"][passenger]["destination"] == taxi_location:
+                possible_actions.append(("drop off", taxi_name, passenger))
 
-        available_actions.append(("wait", taxi_name))
-        return available_actions
+        possible_actions.append(("wait", taxi_name))
+        return possible_actions
 
     def actions(self, state):
         """
         Returns all the actions that can be executed in the given state.
-        The result should be a tuple (or other iterable) of actions
-        as defined in the problem description file.
+        The result should be a tuple (or other iterable) of actions,
+        as defined in the problem instructions file.
 
-        :param state: the current state, in dict format.
+        Parameters
+        ----------
+        state : dict
+            The state, in dict format.
+
+        Returns
+        -------
+        possible_action : tuple
+            All atomic actions for the state.
         """
 
-        taxi_loc = dict((taxi_name, taxi_values["location"]) for taxi_name, taxi_values in state["taxis"].items())
-        for action in filter(lambda a: self.is_action_legal(state, a, taxis_location_dict=taxi_loc),
-                             product(*[self.get_atomic_actions(state, taxi) for taxi in self.taxi_names])):
+        for action in filter(lambda a: self.is_action_legal(state, a),
+                             product(*[self.possible_atomic_actions(state, taxi) for taxi in self.taxi_names])):
             yield action
 
         yield "reset"
         yield "terminate"
 
-    def result(self, state, action, into_self_state=True, return_encoded=True):
+    def deterministic_outcome(self, state, action):
         """
-        Returns the deterministic state that results from executing the given action in the given state.
+        Returns the deterministic state that results from executing the given action on the given state.
         The action must be one of self.actions(state).
 
-        :param state: the current state, in dict format.
-        :param action: the action to perform.
-        :param into_self_state: if True override ~self.state~ with resulting state,
-            else return a deepcopy of ~self.state~ with resulting state changes.
-        :param return_encoded: if True return encoded result, else return in dict format.
-        """
-        state_copy = deepcopy(state)
-        if into_self_state:
-            self.state = state_copy
-            new_state = self.state
-        else:
-            new_state = state_copy
+        Parameters
+        ----------
+        state : dict
+            The state, in dict format.
+        action : tuple
+            The action to perform.
 
-        ttg = new_state["turns to go"]
+        Returns
+        -------
+        new_state : tuple | dict
+            The resulting state.
+        """
+
+        if action == "terminate" or state["turns to go"] == 0:
+            # in case of "terminate" or terminal state - no result, just end of game
+            return None
+
+        new_turns_to_go = state["turns to go"] - 1
         if action == "reset":
-            new_state = deepcopy(self.initial_state)
-            new_state["turns to go"] = ttg - 1
-        elif action == "terminate":
-            new_state = deepcopy(self.initial_state)
-            new_state["turns to go"] = 0
+            new_state = self.copy_state(state=self.initial_state)
+
         else:
-            for taxi_action in action:
-                if taxi_action[0] == "move":
-                    new_state["taxis"][taxi_action[1]]["location"] = taxi_action[2]
-                    new_state["taxis"][taxi_action[1]]["fuel"] -= 1
-                elif taxi_action[0] == "pick up":
-                    new_state["passengers"][taxi_action[2]]["location"] = taxi_action[1]
-                    new_state["taxis"][taxi_action[1]]["capacity"] -= 1
-                elif taxi_action[0] == "drop off":
-                    new_state["passengers"][taxi_action[2]]["location"] = new_state["taxis"][taxi_action[1]]["location"]
-                    new_state["taxis"][taxi_action[1]]["capacity"] += 1
-                elif taxi_action[0] == "refuel":
-                    new_state["taxis"][taxi_action[1]]["fuel"] = self.initial_state["taxis"][taxi_action[1]]["fuel"]
+            new_state = self.copy_state(state=state)
+            # a normal action
+            for atomic_action in action:
+                if atomic_action[0] == "move":
+                    new_state["taxis"][atomic_action[1]]["location"] = atomic_action[2]
+                    new_state["taxis"][atomic_action[1]]["fuel"] -= 1
+                elif atomic_action[0] == "pick up":
+                    new_state["passengers"][atomic_action[2]]["location"] = atomic_action[1]
+                    new_state["taxis"][atomic_action[1]]["capacity"] -= 1
+                elif atomic_action[0] == "drop off":
+                    new_state["passengers"][atomic_action[2]]["location"] = \
+                        new_state["taxis"][atomic_action[1]]["location"]
+                    new_state["taxis"][atomic_action[1]]["capacity"] += 1
+                elif atomic_action[0] == "refuel":
+                    new_state["taxis"][atomic_action[1]]["fuel"] = self.initial_state["taxis"][atomic_action[1]]["fuel"]
 
-            new_state["turns to go"] = ttg - 1
+        new_state["turns to go"] = new_turns_to_go
+        return new_state
 
-        if return_encoded:
-            return self.encode_state(new_state)
-        else:
-            return new_state
-
-    def possible_results(self, state: dict, action):
+    def possible_outcomes(self, state, action):
         """
-        Returns all possible game_tree that result from executing the given action in the given state.
+        Returns all possible states that result from executing the given action in the given state.
         The action must be one of self.actions(state).
-        :param state: the current state, in dict format.
-        :param action: the action to perform.
-        """
-        if action == "terminate" or action == "reset":
-            terminal_state = self.result(state=state, action=action, into_self_state=False, return_encoded=False)
-            return [terminal_state, ]
 
-        state = self.result(state, action, into_self_state=False, return_encoded=False)
-        possible_destinations = [list(set(state["passengers"][p]["possible_goals"]).union(
-            {state["passengers"][p]["destination"]})) for p in self.passengers_names]
+        Parameters
+        ----------
+        state : dict
+            The state, in dict format.
+        action : tuple
+            The action to perform.
+
+        Returns
+        -------
+        new_state : tuple | dict
+            The resulting state.
+        """
+
+        new_state = self.deterministic_outcome(state=state,
+                                               action=action)
+
+        if action == "terminate" or state["turns to go"] == 0:
+            return []
+
+        if action == "reset":
+            return [new_state, ]
+
+        possible_destinations = [list(set(self.possible_goals[p]).union(
+            {new_state["passengers"][p]["destination"]})) for p in self.passengers_names]
         for destinations in product(*possible_destinations):
 
             for passenger, destination in zip(self.passengers_names, destinations):
-                state["passengers"][passenger]["destination"] = destination
+                new_state["passengers"][passenger]["destination"] = destination
 
-            yield deepcopy(state)
+            yield self.copy_state(state=new_state)
+
+    def reward(self, action):
+        """ The function that calculates reward of performing this action on a state. """
+        if action == "reset":
+            return -RESET_PENALTY
+        elif action == "terminate":
+            return 0.0
+        score = 0.0
+        for atomic_action in action:
+            if atomic_action[0] == "drop off":
+                score += DROP_IN_DESTINATION_REWARD
+            elif atomic_action[0] == "refuel":
+                score -= REFUEL_PENALTY
+        return score
+
+    def transition(self, state, action, new_state):
+        """
+        The function that calculates the probability of getting to new_state from state by performing action.
+
+        Parameters
+        ----------
+        state : dict
+            The state, in dict format.
+        action : tuple
+            The action to perform.
+        new_state : dict
+            possible new state, in dict format.
+
+        Returns
+        -------
+        probability : float
+            The probability to reach new_state from state using action.
+        """
+
+        if action == "reset":
+            # when calling action "reset" there is only 1 possible result, which is the initial state,
+            # with turns to go < initial_state["turns to go"].
+            encoded_new_state = self.encode_state(state=new_state)
+            return float(self.encoded_initial_state[0] == encoded_new_state[0] and
+                         self.encoded_initial_state[1] == encoded_new_state[1] and
+                         self.encoded_initial_state[2] > encoded_new_state[2])
+        else:
+
+            # if calling a normal action, then we actually have something to calculate.
+            outcome = self.deterministic_outcome(state=state,
+                                                 action=action)
+            if outcome is None:
+                # when calling action "terminate", or when calling on a terminal state,
+                # the outcome will be None and the game terminates, thus the probability to arrive at any state is 0.
+                return 0.0
+
+            probability = 1.0
+            for passenger in self.passengers_names:
+                # represented conditions as boolean expressions:
+                pc = self.prob_change_goal[passenger]
+                destination = outcome["passengers"][passenger]["destination"]
+                new_destination = new_state["passengers"][passenger]["destination"]
+                possible_goals = self.possible_goals[passenger]
+                lp = len(possible_goals)
+                ind1 = destination in possible_goals
+                ind2 = destination == new_destination
+
+                # original:
+                # if ind1:
+                #     probability *= (pc / len(possible_goals)) + ind2 * (1 - pc)
+                # else:
+                #     if ind2:
+                #         probability *= 1 - pc
+                #     else:
+                #         probability *= (pc / len(possible_goals))
+
+                # simplified mathematical formula on paper and got:
+                # probability *= ind2 * (1 - pc - (pc / lp)) + (1 + (ind1 * ind2)) * (pc / lp)
+
+                # written as conditions we have:
+                if ind2:
+                    probability *= 1 - pc + (ind1 * (pc / lp))
+                else:
+                    probability *= pc / lp
+            return probability
 
     def act(self, state):
         """ The Agent's policy function. """
@@ -407,143 +501,147 @@ class Agent:
 class OptimalTaxiAgent(Agent):
     def __init__(self, initial):
         Agent.__init__(self, initial)
-        self.game_tree = nx.DiGraph()
-        self.build_game_tree(state=self.initial_state,
-                             policy_finder=self.value_iteration)
-        print("initial state value: ", self.game_tree.nodes[self.encode_state(self.initial_state)]['value'])
+        self.game_graph = nx.DiGraph()
+        self.build_game_graph_recursive(state=self.initial_state)
+        self.value_iteration(state=self.initial_state)
+        print("any value? ", all(self.game_graph.nodes[n]["value"] == 0 for n in self.game_graph))
+        print("initial state value: ", self.game_graph.nodes[self.encode_state(self.initial_state)]['value'])
 
-    def build_game_tree(self, state, policy_finder):
+    def is_terminal_state(self, state):
+        # in a terminal state there are no more possible actions to do!
+        return state["turns to go"] == 0
+
+    def expand(self, state):
+        for action in self.actions(state=state):
+            reward = self.reward(action=action)
+            for outcome in self.possible_outcomes(state=state,
+                                                  action=action):
+                yield action, outcome, reward
+
+    def build_game_graph_recursive(self, state):
         """
-        Recursively build a game tree represented as a NetworkX DiGraph, starting from the given initial state.
-        The function uses a depth-first search algorithm to explore the tree.
+        Build a game DAG represented as a NetworkX DiGraph, starting from the initial state.
+        The function uses a depth-first search algorithm to explore the DAG.
 
         Parameters
         ----------
         state : dict
-            The state of the game to explore.
-        policy_finder : function
-            the method that finds the optimal policy.
+            The root state of the graph.
 
         Returns
         -------
-            None
+        Node : tuple
+            The root node of the game graph.
         """
+        if self.is_terminal_state(state=state):
+            # If a state is terminal we will not add it to the graph.
+            return None
+        # If the state is not terminal, then we add it to the graph.
+        node = self.encode_state(state=state)
+        self.game_graph.add_node(node_for_adding=node,
+                                 value=float("-inf"),
+                                 policy=None)
+        # For every child state of this state:
+        for action, child_state, reward in self.expand(state=state):
+            # Explore the subgraph rooted at this child state, and return its node in the graph.
+            child_node = self.build_game_graph_recursive(state=child_state)
+            # If the returned node is None, then this child is a terminal state, thus we will not add it to the graph
+            if child_node is not None:
+                # Else, we connect the subgraph rooted at this child node to this node as a successor of this node.
+                self.game_graph.add_edge(u_of_edge=node,
+                                         v_of_edge=child_node,
+                                         action=action,
+                                         reward=reward)
+        # Finally, return this node to complete the recursion.
+        return node
 
-        # rewind on terminal states
-        s = self.encode_state(state)
-        if state["turns to go"] == 0:
-            self.game_tree.add_node(s,
-                                    value=0.0,
-                                    policy=None)
-            return
-
-        s = self.encode_state(state)
-        # add current state to the game tree
-        self.game_tree.add_node(s, value=0.0, policy=None)
-        # for every performable action, explore all possible successors of the current state
-        for action in self.actions(state):
-            # calculate the reward for the current action
-            action_reward = self.reward(action)
-            # for every unexplored child state, add it's game subtree to the game tree and then connect it to this state
-            for sweet_summer_child in self.possible_results(state, action):
-                s_child = self.encode_state(sweet_summer_child)
-                # explore child subtree if not explored yet
-                if s_child not in self.game_tree.nodes:
-                    self.build_game_tree(state=sweet_summer_child,
-                                         policy_finder=policy_finder)
-                # connect subtree to main game tree
-                self.game_tree.add_edge(u_of_edge=s,
-                                        v_of_edge=s_child,
-                                        action=action,
-                                        reward=action_reward,
-                                        transition_probability=self.transition(state,
-                                                                               action,
-                                                                               sweet_summer_child))
-        policy_finder(s)
-
-    def value_iteration(self, s):
-        # Compute the value of node s as the maximum expected value over all outgoing edges (s, u) from s
-        successors = list(self.game_tree.successors(s))
-        if successors:
-            self.game_tree.nodes[s]['value'], self.game_tree.nodes[s]['policy'] = max(
-                (self.game_tree[s][u]['reward'] + self.game_tree.nodes[u]['value'],
-                 self.game_tree.edges[s, u]['action'])
-                for u in successors)
-        else:
-            self.game_tree.nodes[s]['policy'] = max(list(self.actions(self.decode_state(s))),
-                                                    key=lambda a: self.reward(a))
-            self.game_tree.nodes[s]['value'] = self.reward(self.game_tree.nodes[s]['policy'])
-
-    def policy_iteration(self, discount_factor=1.0):
+    def build_game_graph_iterative(self):
         """
-        Perform policy iteration on a game tree represented as a NetworkX DiGraph.
-        The actions between game_tree are given as edge attributes on the DiGraph.
-        The values and optimal policy are saved as node attributes on the DiGraph.
+        Build a game DAG represented as a NetworkX DiGraph, starting from the initial state.
+        The function uses a depth-first search algorithm to explore the DAG.
 
         Parameters
         ----------
-        discount_factor : float (default: 1.0)
-            The discount factor to use in the policy iteration algorithm.
+            None.
 
         Returns
         -------
-        None
+        Node : tuple
+            The root node of the game graph.
         """
-        # Initialize the values of all nodes to 0
-        for node in self.game_tree.nodes():
-            self.game_tree.nodes[node]["value"] = 0.0
+        # Initialize an empty graph and a stack for storing nodes that need to be explored.
+        self.game_graph = nx.DiGraph()
+        stack = deque()
 
-        # Initialize the policy of all nodes to None
-        for node in self.game_tree.nodes():
-            self.game_tree.nodes[node]["policy"] = None
+        # Add the initial state of the game as the root node of the graph, and push it onto the stack.
+        stack.append(self.initial_state)
 
-        # Set the values of the leaf nodes (terminal game_tree)
-        for node in self.game_tree.nodes():
-            if not self.game_tree.successors(node):
-                # Set the value of the node to the reward associated with the edge leading to the node
-                self.game_tree.nodes[node]["value"] = \
-                    self.game_tree[node][self.game_tree.predecessors(node)[0]]["reward"]
+        # While the stack is not empty:
+        while stack:
+            # Pop a node from the top of the stack.
+            state = stack.pop()
+            # The state is not terminal, so we add it to the graph.
+            node = self.encode_state(state=state)
+            if node not in self.game_graph:
+                self.game_graph.add_node(node_for_adding=node,
+                                         value=float("-inf"),
+                                         policy=None)
+            # For every child state of this state:
+            for action, child_state, reward in self.expand(state=state):
+                # If the child_node is a terminal state, we will not add it to the graph.
+                if not self.is_terminal_state(state=child_state):
+                    stack.append(child_state)
+                    child_node = self.encode_state(state=child_state)
+                    # Else, we connect the subgraph rooted at this child node to this node as a successor of this node.
+                    if child_node not in self.game_graph:
+                        self.game_graph.add_node(node_for_adding=child_node,
+                                                 value=float("-inf"),
+                                                 policy=None)
 
-        # Perform policy iteration
-        while True:
-            # Evaluate the current policy
-            stable = True
-            for node in nx.dfs_postorder_nodes(self.game_tree):
-                if not list(self.game_tree.successors(node)):
-                    # Skip leaf nodes
-                    continue
+                    self.game_graph.add_edge(u_of_edge=node,
+                                             v_of_edge=child_node,
+                                             action=action,
+                                             reward=reward)
 
-                # Calculate the expected value of each action based on the values of the resulting game_tree
-                action_values = {}
-                for successor, edge_attributes in self.game_tree[node].items():
-                    action_values[edge_attributes['action']] = self.game_tree.nodes[successor]["value"] * \
-                                                               edge_attributes["transition_probability"]
+    def value_iteration(self, state):
+        """
+        Perform value-iteration on the game graph and update the "value" and "policy" attributes with the result.
 
-                # Select the action with the highest expected value as the optimal action for the current state
-                optimal_action = max(action_values, key=action_values.get)
+        Parameters
+        ----------
+        state : dict
+            The state to calculate the value for.
 
-                # Update the value and policy of the node if they have changed
-                if self.game_tree.nodes[node]["policy"] != optimal_action:
-                    self.game_tree.nodes[node]["policy"] = optimal_action
-                    stable = False
-                if abs(self.game_tree.nodes[node]["value"] - action_values[optimal_action]) > 1e-6:
-                    self.game_tree.nodes[node]["value"] = action_values[optimal_action]
-                    stable = False
-
-            if stable:
-                # The policy has converged, so we can stop iterating
-                break
-
-        # Discount the values of the nodes based on the discount factor
-        for node in self.game_tree.nodes():
-            if self.game_tree.successors(node):
-                self.game_tree.nodes[node]["value"] /= discount_factor
-
-    def hybrid_iteration(self, state):
-        pass
+        Returns
+        -------
+        value : float
+            the value of the given state.
+        """
+        value = float("-inf")
+        policy = None
+        node = self.encode_state(state=state)
+        # For every state s: V(s) = max[a] (R(a) + ∑[s'] T(s, a, s') * V(s'))
+        for action in self.actions(state=state):
+            action_reward = self.reward(action=action)
+            action_value = action_reward
+            for outcome in self.possible_outcomes(state=state, action=action):
+                if self.is_terminal_state(state=outcome):
+                    action_value += self.transition(state=state,
+                                                    action=action,
+                                                    new_state=outcome) * action_reward
+                else:
+                    action_value += self.transition(state=state,
+                                                    action=action,
+                                                    new_state=outcome) * self.value_iteration(state=outcome)
+            if value < action_value:
+                value = action_value
+                policy = action
+        self.game_graph.nodes[node]["value"] = value
+        self.game_graph.nodes[node]["policy"] = policy
+        return value
 
     def act(self, state):
-        return self.game_tree.nodes[self.encode_state(state)]["policy"]
+        return self.game_graph.nodes[self.encode_state(state)]["policy"]
 
 
 class TaxiAgent(Agent):
