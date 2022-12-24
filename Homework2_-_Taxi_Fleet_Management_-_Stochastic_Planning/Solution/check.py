@@ -14,6 +14,7 @@ DROP_IN_DESTINATION_REWARD = 100
 INIT_TIME_LIMIT = 300
 TURN_TIME_LIMIT = 0.1
 
+random.seed(42)
 
 def initiate_agent(state):
     """
