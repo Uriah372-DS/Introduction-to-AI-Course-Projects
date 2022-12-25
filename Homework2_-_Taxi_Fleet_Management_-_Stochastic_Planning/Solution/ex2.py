@@ -324,6 +324,9 @@ class Agent:
             All atomic actions for the state.
         """
 
+        if state["turns to go"] == 0:
+            return []
+
         for action in filter(lambda a: self.is_action_legal(state, a),
                              product(*[self.possible_atomic_actions(state, taxi) for taxi in self.taxi_names])):
             yield action
