@@ -109,7 +109,7 @@ class TaxiStochasticProblem:
             """
             taxi_name = refuel_action[1]
             i, j = self.state['taxis'][taxi_name]['location']
-            if self.state['map'][i][j] == 'game_tree':
+            if self.state['map'][i][j] == 'G':
                 return True
             else:
                 return False
@@ -272,14 +272,10 @@ def main():
     main function
     """
     print(f"IDS: {ids}")
-    for i, an_input in zip(range(1, 19), small_inputs):
-        try:
-            print(f"Test No. {i}:")
-            my_problem = TaxiStochasticProblem(an_input)
-            my_problem.run_round()
-        except EndOfGame:
-            continue
-    for an_input in additional_inputs:
+    for i, an_input in zip(range(1, 19), [*small_inputs, *additional_inputs]):
+        # if i < 16:
+        #     continue
+        print(f"Test No. {i}:")
         try:
             my_problem = TaxiStochasticProblem(an_input)
             my_problem.run_round()
