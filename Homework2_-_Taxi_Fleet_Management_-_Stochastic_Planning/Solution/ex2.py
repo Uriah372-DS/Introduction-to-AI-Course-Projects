@@ -48,6 +48,9 @@ class Agent:
         self.initial_state = initial_copy
         self.encoded_initial_state = self.encode_state(self.initial_state)
 
+        # optimization related variables:
+        self.outcome = self.copy_state(self.initial_state, to_outcome=False)
+
     def build_map_graph(self):
         """ build a graph of the map. """
         g = nx.grid_graph((self.map_shape[1], self.map_shape[0]))
@@ -122,8 +125,11 @@ class Agent:
         decoded_state["turns to go"] = state[2]
         return decoded_state
 
-    def copy_state(self, state):
-        new_state = {"taxis": {}, "passengers": {}}
+    def copy_state(self, state, to_outcome=True):
+        if to_outcome:
+            new_state = self.outcome
+        else:
+            new_state = {"taxis": {}, "passengers": {}}
         for taxi_name in self.taxi_names:
             new_state["taxis"][taxi_name] = {"location": state["taxis"][taxi_name]["location"],
                                              "fuel": state["taxis"][taxi_name]["fuel"],
@@ -337,7 +343,7 @@ class Agent:
         yield "reset"
         yield "terminate"
 
-    def deterministic_outcome(self, state, action):
+    def deterministic_outcome(self, state, action, to_outcome=True):
         """
         Returns the deterministic state that results from executing the given action on the given state.
         The action must be one of self.actions(state).
@@ -348,6 +354,8 @@ class Agent:
             The state, in dict format.
         action : tuple
             The action to perform.
+        to_outcome : bool
+            If True then set output into outcome attribute, else set into copy.
 
         Returns
         -------
@@ -356,15 +364,15 @@ class Agent:
         """
 
         if action == "terminate" or state["turns to go"] == 0:
-            # in case of "terminate" or terminal state - no result, just end of game
+            # in case of "terminate" or terminal state - no result, just end of game.
             return None
 
         new_turns_to_go = state["turns to go"] - 1
         if action == "reset":
-            new_state = self.copy_state(state=self.initial_state)
+            new_state = self.copy_state(state=self.initial_state, to_outcome=to_outcome)
 
         else:
-            new_state = self.copy_state(state=state)
+            new_state = self.copy_state(state=state, to_outcome=to_outcome)
             # a normal action
             for atomic_action in action:
                 if atomic_action[0] == "move":
@@ -401,23 +409,23 @@ class Agent:
             The resulting state.
         """
 
-        new_state = self.deterministic_outcome(state=state,
-                                               action=action)
-
         if action == "terminate" or state["turns to go"] == 0:
             return []
+
+        new_state = self.deterministic_outcome(state=state,
+                                               action=action)
 
         if action == "reset":
             return [new_state, ]
 
         possible_destinations = [list(set(self.possible_goals[p]).union(
             {new_state["passengers"][p]["destination"]})) for p in self.passengers_names]
-        for destinations in product(*possible_destinations):
 
+        for destinations in product(*possible_destinations):
             for passenger, destination in zip(self.passengers_names, destinations):
                 new_state["passengers"][passenger]["destination"] = destination
 
-            yield self.copy_state(state=new_state)
+            yield new_state
 
     def reward(self, action):
         """ The function that calculates reward of performing this action on a state. """
@@ -462,9 +470,7 @@ class Agent:
         else:
 
             # if calling a normal action, then we actually have something to calculate.
-            outcome = self.deterministic_outcome(state=state,
-                                                 action=action)
-            if outcome is None:
+            if action == "terminate" or state["turns to go"] == 0:
                 # when calling action "terminate", or when calling on a terminal state,
                 # the outcome will be None and the game terminates, thus the probability to arrive at any state is 0.
                 return 0.0
@@ -473,7 +479,7 @@ class Agent:
             for passenger in self.passengers_names:
                 # represented conditions as boolean expressions:
                 pc = self.prob_change_goal[passenger]
-                destination = outcome["passengers"][passenger]["destination"]
+                destination = state["passengers"][passenger]["destination"]
                 new_destination = new_state["passengers"][passenger]["destination"]
                 possible_goals = self.possible_goals[passenger]
                 lp = len(possible_goals)
@@ -510,12 +516,16 @@ class OptimalTaxiAgent(Agent):
         # self.game_graph = nx.DiGraph()
         # self.build_game_graph_recursive(state=self.initial_state)
         # self.value_iteration(state=self.initial_state)
+        self.gas_stations = [(i, j)
+                             for i in range(self.map_shape[0])
+                             for j in range(self.map_shape[1])
+                             if self.map[i][j] == "G"]
         self.states = self.all_state_permutations(self.initial_state)
         self.filter_states(states=self.states, initial_state=self.encoded_initial_state)
-        # self.basic_policy_iteration(states=self.states)
-        self.value_iteration(states=self.states)
-        print("any value? ", all(self.states[n]["value"] == 0 for n in self.states))
-        print("initial state value: ", self.states[self.encoded_initial_state]['value'])
+        self.basic_policy_iteration(states=self.states)
+        # self.value_iteration(states=self.states)
+        print("Are all values 0?", all(self.states[n]["value"] == 0 for n in self.states))
+        print("Initial state value:", self.states[self.encoded_initial_state]['value'])
 
     def is_terminal_state(self, state):
         # in a terminal state there are no more possible actions to do!
@@ -742,7 +752,16 @@ class OptimalTaxiAgent(Agent):
             if state not in visited:
                 del states[state]
 
-    def basic_policy_iteration(self, states):
+    def calculate_value(self, state, action):
+        value = 0.0
+        for new_state in self.possible_outcomes(state, action):
+            encoded_new_state = self.encode_state(new_state)
+            prob = self.transition(state, action, new_state)
+            value += prob * self.states[encoded_new_state]["value"]
+        value += self.reward(action)
+        return value
+
+    def basic_policy_iteration(self, states, threshold=float("inf")):
         """
         Performs policy iteration on the states given in this dict.
 
@@ -750,6 +769,10 @@ class OptimalTaxiAgent(Agent):
         ----------
         states : dict
             All the possible states in the game.
+        threshold : float
+            A minimal value for the expected score that the policy should have.
+            For example, if set to be 0.0,
+            than will stop improving once a policy that has a positive expectation is achieved
 
         Returns
         -------
@@ -770,13 +793,7 @@ class OptimalTaxiAgent(Agent):
             # Calculate the value of each state using the current policy
             for state in states:
                 decoded_state = self.decode_state(state)
-                value = 0
-                for new_state in self.possible_outcomes(decoded_state, states[state]["policy"]):
-                    encoded_new_state = self.encode_state(new_state)
-                    prob = self.transition(decoded_state, states[state]["policy"], new_state)
-                    value += prob * states[encoded_new_state]["value"]
-                value += self.reward(states[state]["policy"])
-                states[state]["value"] = value
+                states[state]["value"] = self.calculate_value(decoded_state, states[state]["policy"])
 
             # Set the policy for each state to the action that maximizes the value of the state
             for state in states:
@@ -785,22 +802,19 @@ class OptimalTaxiAgent(Agent):
                 best_policy = "terminate"
                 best_value = 0.0
                 for action in self.actions(decoded_state):
-                    value = 0
-                    for new_state in self.possible_outcomes(decoded_state, action):
-                        encoded_new_state = self.encode_state(new_state)
-                        prob = self.transition(decoded_state, action, new_state)
-                        value += prob * states[encoded_new_state]["value"]
-                    value += self.reward(action)
+                    value = self.calculate_value(decoded_state, action)
                     if value > best_value:
                         best_value = value
                         best_policy = action
                 states[state]["policy"] = best_policy
                 if best_policy != old_policy:
                     policy_changed = True
+                if states[self.encoded_initial_state]["value"] > threshold:
+                    break
 
     def basic_bitch_policy(self, state):
         """
-        The most basicest bitchest of policies!
+        The most basicest and bitchest of policies!
 
         Parameters
         ----------
@@ -812,7 +826,10 @@ class OptimalTaxiAgent(Agent):
         action : tuple
             The policy.
         """
+        if not state["turns to go"]:
+            return "terminate"
         atomic_actions = []
+        reset_flag = False
         for taxi_name in self.taxi_names:
             for p in self.passengers_names:
                 if state["passengers"][p]["location"] == taxi_name and \
@@ -822,13 +839,37 @@ class OptimalTaxiAgent(Agent):
                         state["passengers"][p]["location"] != state["passengers"][p]["destination"]:
                     atomic_actions.append(("pick up", taxi_name, p))
                 else:
-                    path_to_p = nx.shortest_path(G=self.map_graph,
-                                                 source=state["taxis"][taxi_name]["location"],
-                                                 target=state["passengers"][p]["location"])
+                    path_to_p = list(nx.shortest_path(G=self.map_graph,
+                                                      source=state["taxis"][taxi_name]["location"],
+                                                      target=state["passengers"][p]["location"]))
                     if len(path_to_p) < state["taxis"][taxi_name]["fuel"]:
                         atomic_actions.append(("move", taxi_name, path_to_p[1]))
                     else:
-
+                        nearest_gas_station = self.gas_stations[0]
+                        min_dist = list(nx.shortest_path_length(G=self.map_graph,
+                                                                source=state["taxis"][taxi_name]["location"],
+                                                                target=nearest_gas_station))
+                        for gas_station in self.gas_stations:
+                            dist = nx.shortest_path_length(G=self.map_graph,
+                                                           source=state["taxis"][taxi_name]["location"],
+                                                           target=gas_station)
+                            if dist < min_dist:
+                                nearest_gas_station = gas_station
+                                min_dist = dist
+                        if min_dist > state["taxis"][taxi_name]["fuel"]:
+                            reset_flag = True
+                        else:
+                            if not min_dist:
+                                atomic_actions.append(("refuel", taxi_name))
+                            else:
+                                path_to_g = nx.shortest_path(G=self.map_graph,
+                                                             source=state["taxis"][taxi_name]["location"],
+                                                             target=nearest_gas_station)
+                                atomic_actions.append(("move", taxi_name, path_to_g[1]))
+        if reset_flag:
+            return "reset"
+        else:
+            return tuple(atomic_actions)
 
     def act(self, state):
         return self.states[self.encode_state(state)]["policy"]
