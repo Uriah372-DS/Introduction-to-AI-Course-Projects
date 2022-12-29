@@ -14,8 +14,6 @@ DROP_IN_DESTINATION_REWARD = 100
 INIT_TIME_LIMIT = 300
 TURN_TIME_LIMIT = 0.1
 
-random.seed(42)
-
 
 def initiate_agent(state):
     """
@@ -275,9 +273,10 @@ def main():
     """
     print(f"IDS: {ids}")
     for i, an_input in zip(range(1, 19), [*small_inputs, *additional_inputs]):
-        if i < 16: continue
+        # if i < 16:
+        #     continue
+        print(f"Test No. {i}:")
         try:
-            print(f"Test No. {i}:")
             my_problem = TaxiStochasticProblem(an_input)
             my_problem.run_round()
         except EndOfGame:
