@@ -1,11 +1,8 @@
 import random
-
+import numpy as np
 import networkx as nx
 from copy import deepcopy
 from itertools import product
-from collections import deque
-
-# import matplotlib.pyplot as plt; nx.draw(self.game_graph); plt.show()
 
 ids = ["322691718", "313539850"]
 
@@ -334,12 +331,10 @@ class Agent:
         """
 
         if state["turns to go"] == 0:
-            return []
+            return
 
-        for action in filter(lambda a: self.is_action_legal(state, a),
-                             product(*[self.possible_atomic_actions(state, taxi) for taxi in self.taxi_names])):
-            yield action
-
+        yield from filter(lambda a: self.is_action_legal(state, a),
+                          product(*[self.possible_atomic_actions(state, taxi) for taxi in self.taxi_names]))
         yield "reset"
         yield "terminate"
 
@@ -391,7 +386,7 @@ class Agent:
         new_state["turns to go"] = new_turns_to_go
         return new_state
 
-    def possible_outcomes(self, state, action):
+    def possible_outcomes(self, state, action, to_outcome=True):
         """
         Returns all possible states that result from executing the given action in the given state.
         The action must be one of self.actions(state).
@@ -402,6 +397,8 @@ class Agent:
             The state, in dict format.
         action : tuple
             The action to perform.
+        to_outcome : bool
+            If True then copy to ~self.outcome~ attribute, else copy to new object.
 
         Returns
         -------
@@ -410,22 +407,22 @@ class Agent:
         """
 
         if action == "terminate" or state["turns to go"] == 0:
-            return []
+            return
 
         new_state = self.deterministic_outcome(state=state,
-                                               action=action)
-
+                                               action=action,
+                                               to_outcome=to_outcome)
         if action == "reset":
-            return [new_state, ]
-
-        possible_destinations = [list(set(self.possible_goals[p]).union(
-            {new_state["passengers"][p]["destination"]})) for p in self.passengers_names]
-
-        for destinations in product(*possible_destinations):
-            for passenger, destination in zip(self.passengers_names, destinations):
-                new_state["passengers"][passenger]["destination"] = destination
-
             yield new_state
+        else:
+            possible_destinations = [list(set(self.possible_goals[p]).union(
+                {new_state["passengers"][p]["destination"]})) for p in self.passengers_names]
+
+            for destinations in product(*possible_destinations):
+                for passenger, destination in zip(self.passengers_names, destinations):
+                    new_state["passengers"][passenger]["destination"] = destination
+
+                yield self.copy_state(new_state, to_outcome=to_outcome)
 
     def reward(self, action):
         """ The function that calculates reward of performing this action on a state. """
@@ -511,21 +508,15 @@ class Agent:
 
 
 class OptimalTaxiAgent(Agent):
-    def __init__(self, initial):
+    def __init__(self, initial, threshold=float("inf")):
         Agent.__init__(self, initial)
-        # self.game_graph = nx.DiGraph()
-        # self.build_game_graph_recursive(state=self.initial_state)
-        # self.value_iteration(state=self.initial_state)
         self.gas_stations = [(i, j)
                              for i in range(self.map_shape[0])
                              for j in range(self.map_shape[1])
                              if self.map[i][j] == "G"]
         self.states = self.all_state_permutations(self.initial_state)
         self.filter_states(states=self.states, initial_state=self.encoded_initial_state)
-        self.basic_policy_iteration(states=self.states)
-        # self.value_iteration(states=self.states)
-        print("Are all values 0?", all(self.states[n]["value"] == 0 for n in self.states))
-        print("Initial state value:", self.states[self.encoded_initial_state]['value'])
+        self.policy_iteration_with_threshold(states=self.states, threshold=threshold)
 
     def is_terminal_state(self, state):
         # in a terminal state there are no more possible actions to do!
@@ -537,140 +528,6 @@ class OptimalTaxiAgent(Agent):
             for outcome in self.possible_outcomes(state=state,
                                                   action=action):
                 yield action, outcome, reward
-
-    def build_game_graph_recursive(self, state):
-        """
-        Build a game DAG represented as a NetworkX DiGraph, starting from the initial state.
-        The function uses a depth-first search algorithm to explore the DAG.
-
-        Parameters
-        ----------
-        state : dict
-            The root state of the graph.
-
-        Returns
-        -------
-        Node : tuple
-            The root node of the game graph.
-        """
-        if self.is_terminal_state(state=state):
-            # If a state is terminal we will not add it to the graph.
-            return None
-        # If the state is not terminal, then we add it to the graph.
-        node = self.encode_state(state=state)
-        self.game_graph.add_node(node_for_adding=node,
-                                 value=float("-inf"),
-                                 policy=None)
-        # For every child state of this state:
-        for action, child_state, reward in self.expand(state=state):
-            # Explore the subgraph rooted at this child state, and return its node in the graph.
-            child_node = self.build_game_graph_recursive(state=child_state)
-            # If the returned node is None, then this child is a terminal state, thus we will not add it to the graph
-            if child_node is not None:
-                # Else, we connect the subgraph rooted at this child node to this node as a successor of this node.
-                self.game_graph.add_edge(u_of_edge=node,
-                                         v_of_edge=child_node,
-                                         action=action,
-                                         reward=reward)
-        # Finally, return this node to complete the recursion.
-        return node
-
-    def build_game_graph_iterative(self):
-        """
-        Build a game DAG represented as a NetworkX DiGraph, starting from the initial state.
-        The function uses a depth-first search algorithm to explore the DAG.
-
-        Parameters
-        ----------
-            None.
-
-        Returns
-        -------
-        Node : tuple
-            The root node of the game graph.
-        """
-        # Initialize an empty graph and a stack for storing nodes that need to be explored.
-        self.game_graph = nx.DiGraph()
-        stack = deque()
-
-        # Add the initial state of the game as the root node of the graph, and push it onto the stack.
-        stack.append(self.initial_state)
-
-        # While the stack is not empty:
-        while stack:
-            # Pop a node from the top of the stack.
-            state = stack.pop()
-            # The state is not terminal, so we add it to the graph.
-            node = self.encode_state(state=state)
-            if node not in self.game_graph:
-                self.game_graph.add_node(node_for_adding=node,
-                                         value=float("-inf"),
-                                         policy=None)
-            # For every child state of this state:
-            for action, child_state, reward in self.expand(state=state):
-                # If the child_node is a terminal state, we will not add it to the graph.
-                if not self.is_terminal_state(state=child_state):
-                    stack.append(child_state)
-                    child_node = self.encode_state(state=child_state)
-                    # Else, we connect the subgraph rooted at this child node to this node as a successor of this node.
-                    if child_node not in self.game_graph:
-                        self.game_graph.add_node(node_for_adding=child_node,
-                                                 value=float("-inf"),
-                                                 policy=None)
-
-                    self.game_graph.add_edge(u_of_edge=node,
-                                             v_of_edge=child_node,
-                                             action=action,
-                                             reward=reward)
-
-    def value_iteration(self, states):
-        """
-        Perform value-iteration on the game graph and update the "value" and "policy" attributes with the result.
-
-        Parameters
-        ----------
-        states : dict
-            The state to calculate the value for.
-
-        Returns
-        -------
-        value : float
-            the value of the given state.
-        """
-        # Initialize the value of every state to a "neutral" value
-        for state in states:
-            states[state]["value"] = 0.0
-
-        # While the value of any state has changed
-        value_changed = True
-        while value_changed:
-            value_changed = False
-            # For each state, calculate the value of the state by taking the maximum of the expected rewards of all actions
-            for state in states:
-                decoded_state = self.decode_state(state)
-                old_value = states[state]["value"]  # Store the old value of the state
-                best_value = float("-inf")  # Initialize the best value to a very low number
-                best_policy = "terminate"  # Initialize the best policy to None
-                # For each action that can be taken from the state
-                for action in self.actions(decoded_state):
-                    value = 0.0  # Initialize the value of the action to 0
-                    # For each resulting state
-                    for new_state in self.possible_outcomes(decoded_state, action):
-                        encoded_new_state = self.encode_state(new_state)
-                        prob = self.transition(decoded_state, action,
-                                               new_state)  # Calculate the probability of transitioning to the new state
-                        value += prob * states[encoded_new_state][
-                            "value"]  # Calculate the expected reward by summing the rewards of all transitions from this state to other states, weighted by their probabilities
-                    value += self.reward(action)  # Add the immediate reward for taking the action
-                    # If the value of the action is greater than the current best value
-                    if value > best_value:
-                        best_value = value  # Update the best value
-                        best_policy = action  # Update the best policy
-                states[state]["value"] = best_value  # Set the value of the state to the best value
-                states[state]["policy"] = best_policy  # Set the policy of the state to the best policy
-                # If the value of the state has changed
-                if best_value != old_value:
-                    value_changed = True  # Set the value_changed flag to True to continue the iteration
 
     def all_state_permutations(self, state):
         """
@@ -761,7 +618,7 @@ class OptimalTaxiAgent(Agent):
         value += self.reward(action)
         return value
 
-    def basic_policy_iteration(self, states, threshold=float("inf")):
+    def policy_iteration_with_threshold(self, states, threshold=float("inf")):
         """
         Performs policy iteration on the states given in this dict.
 
@@ -875,10 +732,350 @@ class OptimalTaxiAgent(Agent):
         return self.states[self.encode_state(state)]["policy"]
 
 
-class TaxiAgent(Agent):
-    def __init__(self, initial):
+class QLearningAgent(Agent):
+    def __init__(self, initial, explore_policy="glie1"):
         Agent.__init__(self, initial)
-        self.default_agent = OptimalTaxiAgent(initial)
+        self.state = self.copy_state(self.initial_state)
+        self.score = 0
+        self.num_features = len(self.calculate_features(self.state, list(self.actions(self.state))[0]))
+        self.weights = self.initialize_weights()
+        self.alpha = 1
+        self.temperature = 1
+        self.explore_policy = explore_policy  # The explore/exploit policy
+        self.num_visits = 0  # used for the other explore/exploit policy
+
+        total_episodes = 0
+        while self.score <= 0:
+            total_episodes += 1
+            print(f"\nEpisode Number {total_episodes}:")
+            self.episode_simulation()
+        print(f"final episode score: {self.score}")
+        print(f"number of episodes: {total_episodes}")
+
+    def episode_simulation(self):
+        self.state = self.copy_state(self.initial_state)
+        self.num_visits = 0
+        self.score = 0
+        for i in range(self.initial_state["turns to go"]):
+
+            # print(i, self.state["turns to go"])
+            # Choose an action using the current weights
+            action = self.choose_action(self.state, explore=True)
+            print(action)
+            # Get the reward for the transition from state to new_state via action
+            reward = self.reward(action)
+            self.score += reward
+            # Get all possible outcomes of taking the action
+            outcomes = list(self.possible_outcomes(self.state, action, to_outcome=False))
+            if not outcomes:
+                break
+            # print(action)
+            # for o in outcomes:
+            #     print(o)
+
+            # Get the probabilities of each outcome
+            probabilities = []
+            for outcome in outcomes:
+                probabilities.append(self.transition(self.state, action, outcome))
+            # print(f"probabilities: {probabilities}")
+
+            # Choose new state based on the probabilities of each outcome
+            outcomes_indices = list(range(len(outcomes)))
+            new_state = outcomes[np.random.choice(outcomes_indices, p=probabilities)]
+
+            # Update the weights based on the result of the action
+            self.update(self.state, action, new_state, reward, self.alpha)
+
+            # Set the current state to the new state
+            self.state = new_state
+
+    def initialize_weights(self):
+        initial_weights = [1, ]
+        for taxi in self.taxi_names:
+            initial_weights.append(0)
+            initial_weights.append(0)
+            initial_weights.append(0)
+            initial_weights.append(1)
+            initial_weights.append(1)
+        for p in self.passengers_names:
+            initial_weights.append(0)
+            initial_weights.append(0)
+            initial_weights.append(0)
+            initial_weights.append(0)
+            initial_weights.append(1)
+            initial_weights.append(1)
+            initial_weights.append(2)
+            initial_weights.append(0)
+        initial_weights.append(0)
+
+        initial_weights.append(-1000)
+        initial_weights.append(-1000)
+        for _ in self.taxi_names:
+            initial_weights.append(1)  # move
+            initial_weights.append(1)  # move
+            initial_weights.append(1)  # move
+            initial_weights.append(1)  # move
+            for _ in self.passengers_names:
+                initial_weights.append(1)  # good move (take passenger closer to his destination)
+            initial_weights.append(0)
+            initial_weights.append(1)  # pick up
+            initial_weights.append(1)  # drop off
+            initial_weights.append(-1)  # refuel
+            initial_weights.append(-1)  # wait
+        initial_weights.append(0)  # for bias term
+        return np.array(initial_weights, dtype=float)
+
+    def get_nearest_passenger(self, state, taxi):
+        t_loc = state["taxis"][taxi]["location"]
+        min_dist = float("inf")
+        min_p = None
+        for p in self.passengers_names:
+            if state["passengers"][p]["location"] == state["passengers"][p]["destination"]:
+                continue
+            p_loc = state["passengers"][p]["location"]
+            if isinstance(p_loc, str):
+                if p_loc != taxi:
+                    continue
+                else:
+                    p_loc = state["taxis"][p_loc]["location"]
+            dist = abs(t_loc[0] - p_loc[0]) + abs(t_loc[1] - p_loc[1])
+            if min_dist > dist:
+                min_dist = dist
+                min_p = p
+        if min_dist == float("inf"):
+            min_dist = 0
+            min_p = self.passengers_names[0]
+        return min_dist, min_p
+
+    def calculate_features(self, state, action):
+        features = [state["turns to go"], ]
+        for taxi in self.taxi_names:
+            features.append(self.get_nearest_passenger(state, taxi)[0])
+            features.append(state["taxis"][taxi]["location"][0])
+            features.append(state["taxis"][taxi]["location"][1])
+            features.append(state["taxis"][taxi]["fuel"])
+            features.append(state["taxis"][taxi]["capacity"])
+
+        p_in_dest = 0
+        for p in self.passengers_names:
+            if isinstance(state["passengers"][p]["location"], str):
+                location = state["taxis"][state["passengers"][p]["location"]]["location"]
+            else:
+                location = state["passengers"][p]["location"]
+            features.append(location[0])
+            features.append(location[1])
+            features.append(state["passengers"][p]["destination"][0])
+            features.append(state["passengers"][p]["destination"][1])
+            x_dist = abs(state["passengers"][p]["destination"][0] - location[0])
+            y_dist = abs(state["passengers"][p]["destination"][1] - location[1])
+            features.append(x_dist)
+            features.append(y_dist)
+            features.append(x_dist + y_dist)
+            if location == state["passengers"][p]["destination"]:
+                features.append(1)
+                p_in_dest += 1
+            else:
+                features.append(0)
+        features.append(p_in_dest)
+
+        if isinstance(action, str):
+            if action == "terminate":
+                features.append(1)
+            else:
+                features.append(0)
+            if action == "reset":
+                features.append(1)
+            else:
+                features.append(0)
+            for _ in self.taxi_names:
+                features.append(0)
+                features.append(0)
+                features.append(0)
+                features.append(0)
+                features.append(0)
+                for _ in self.passengers_names:
+                    features.append(0)
+                features.append(0)
+                features.append(0)
+                features.append(0)
+                features.append(0)
+        else:
+            features.append(0)
+            features.append(0)
+            for atomic_action in action:
+                if atomic_action[0] == "move":
+                    next_location = atomic_action[2]
+                    current_location = state["taxis"][atomic_action[1]]["location"]
+                    for loc in [(current_location[0] - 1, current_location[1]),
+                                (current_location[0] + 1, current_location[1]),
+                                (current_location[0], current_location[1] - 1),
+                                (current_location[0], current_location[1] + 1)]:
+                        if next_location == loc:
+                            features.append(1)
+                        else:
+                            features.append(0)
+
+                    for p in self.passengers_names:
+                        if state["passengers"][p]["location"] == atomic_action[1]:
+                            dest = state["passengers"][p]["destination"]
+                            if abs(dest[0] - next_location[0]) + abs(dest[1] - next_location[1]) <= \
+                                    abs(dest[0] - current_location[0]) + abs(dest[1] - current_location[1]):
+                                p_val = 1
+                            else:
+                                p_val = -1
+                        else:
+                            p_val = 0
+                        features.append(p_val)
+
+                    current_dist, nearest_p = self.get_nearest_passenger(state, atomic_action[1])
+                    p_loc = state["passengers"][nearest_p]["location"]
+                    if isinstance(p_loc, str):
+                        p_loc = state["taxis"][p_loc]["location"]
+                    next_dist = abs(next_location[0] - p_loc[0]) + abs(next_location[1] - p_loc[1])
+                    features.append(current_dist - next_dist)
+                else:
+                    features.append(0)
+                    features.append(0)
+                    features.append(0)
+                    features.append(0)
+                    features.append(0)
+                    for p in self.passengers_names:
+                        features.append(0)
+                if atomic_action[0] == "pick up":
+                    features.append(1)
+                else:
+                    features.append(0)
+                if atomic_action[0] == "drop off":
+                    features.append(1)
+                else:
+                    features.append(0)
+                if atomic_action[0] == "refuel":
+                    features.append(1)
+                else:
+                    features.append(0)
+                if atomic_action[0] == "wait":
+                    features.append(1)
+                else:
+                    features.append(0)
+
+        features.append(1)  # for bias term
+
+        return np.array(features)
+
+    def calculate_q_value(self, state, action):
+        return np.dot(self.calculate_features(state, action), self.weights)
+
+    def choose_action(self, state, explore=False):
+        # Calculate the value of the state by taking the dot product of the features and weights of the state
+        actions = list(self.actions(state))
+        # actions.remove("reset")
+        # actions.remove("terminate")
+        actions_indices = list(range(len(actions)))
+
+        # If the explore flag is set to True
+        if explore:
+            actions.remove("reset")
+            actions.remove("terminate")
+            actions_indices = list(range(len(actions)))
+            self.num_visits += 1
+
+            # Choose an action using the specified policy
+            if self.explore_policy == "boltzmann":
+
+                # Apply the Boltzmann exploration policy
+                # Use a temperature that decreases with time:
+                self.temperature *= 0.999
+                # temperature = 1 / self.num_visits
+                values = np.exp(
+                    np.array([self.calculate_q_value(state, action) / self.temperature for action in actions]))
+
+                # Calculate the Boltzmann probabilities
+                boltzmann_probs = values / np.sum(values)
+                # print(f"weights: {self.weights}")
+                # print(f"values: {values}")
+                # print(f"boltzmann_probs: {boltzmann_probs}")
+
+                # Choose an action based on the Boltzmann probabilities
+                return actions[np.random.choice(actions_indices, p=boltzmann_probs)]
+
+            elif self.explore_policy == "glie1":
+                # Apply GLIE policy 1 with p(t)=1 / num_visits
+
+                # Calculate the GLIE exploration rate
+                epsilon = 1 / self.num_visits
+                if np.random.rand() < epsilon:
+                    return actions[np.random.choice(actions_indices)]
+            else:
+                raise ValueError("Invalid policy specified")
+
+        # Exploit by choosing the action with the highest Q value
+        q_values = [self.calculate_q_value(state, action) for action in actions]
+        return actions[np.argmax(q_values)]
+
+    def update(self, s, a, s_prime, r, alpha):
+        # Update the weights based on the result of the action
+        features = self.calculate_features(s, a)
+        if s_prime["turns to go"] > 0:
+            max_q_s_a_prime, max_a_prime = max([(self.calculate_q_value(s_prime, a_prime), a_prime)
+                                                for a_prime in self.actions(s_prime)],
+                                               key=lambda t: t[0])
+            # print(max_q_s_a_prime, max_a_prime)
+        else:
+            max_q_s_a_prime = 0
+        f = self.shaped_reward(s, s_prime)
+        target = r + f + max_q_s_a_prime
+        error = target - self.calculate_q_value(s, a)
+        self.weights += alpha * error * features
+        self.weights = self.weights / np.sum(self.weights)
+
+    def potential(self, state):
+        e = 1e-6
+        total_dist_to_dest = 0
+        for p in self.passengers_names:
+            p_loc = state["passengers"][p]["location"]
+            p_dest = state["passengers"][p]["destination"]
+            if isinstance(p_loc, str):
+                total_dist_to_dest += 1 / len(self.passengers_names)
+                p_loc = state["taxis"][p_loc]["location"]
+            total_dist_to_dest += abs(p_dest[0] - p_loc[0]) + abs(p_dest[1] - p_loc[1])
+
+        total_dist_to_p = 0
+        for t in self.taxi_names:
+            t_loc = state["taxis"][t]["location"]
+            min_dist = float("inf")
+            for p in self.passengers_names:
+                p_loc = state["passengers"][p]["location"]
+                if isinstance(p_loc, str):
+                    total_dist_to_dest += 1 / len(self.passengers_names)
+                    if p_loc != t:
+                        continue
+                    else:
+                        p_loc = state["taxis"][p_loc]["location"]
+                dist = abs(t_loc[0] - p_loc[0]) + abs(t_loc[1] - p_loc[1])
+                if min_dist > dist:
+                    min_dist = dist
+            total_dist_to_p += min_dist
+        r1 = 1 - ((total_dist_to_dest + e) / (len(self.passengers_names) * (sum(self.map_shape) - 2 + e)))
+        r2 = 1 - ((total_dist_to_p + e) / (len(self.taxi_names) * (sum(self.map_shape) - 2 + e)))
+        r3 = state["turns to go"] / self.initial_state["turns to go"]
+        return (r1 + r2 + r3) / 3
+
+    def shaped_reward(self, state, new_state):
+        """ The function that calculates reward of performing this action on a state. """
+        return self.potential(new_state) - self.potential(state)
 
     def act(self, state):
-        return self.default_agent.act(state)
+        self.state = state
+        # Calculate the best action for the given state using the pre-computed weights
+        policy = max([action for action in self.actions(state)],
+                     key=lambda a: self.calculate_q_value(state, a))
+        # print(f"policy: {policy}")
+        return policy
+
+
+class TaxiAgent(OptimalTaxiAgent):
+    def __init__(self, initial):
+        super().__init__(initial, threshold=0)
+
+    def act(self, state):
+        return super().act(state)
