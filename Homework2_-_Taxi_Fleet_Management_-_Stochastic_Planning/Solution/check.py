@@ -273,7 +273,7 @@ def main():
     """
     print(f"IDS: {ids}")
     for i, an_input in zip(range(1, 19), [*small_inputs, *additional_inputs]):
-        # if i < 16:
+        # if i < 5:
         #     continue
         print(f"Test No. {i}:")
         try:
